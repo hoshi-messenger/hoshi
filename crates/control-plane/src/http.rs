@@ -1,22 +1,19 @@
 use std::net::SocketAddr;
 
-use axum::{Router, response::Html, routing::get};
+use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 
-use crate::State;
+use crate::{ServerState, index_get};
 
 pub async fn http_server(
-    state: State,
+    state: ServerState,
     listener: TcpListener,
 ) -> anyhow::Result<impl std::future::IntoFuture<Output = Result<(), std::io::Error>>> {
     let bind_addr = listener.local_addr()?;
     let process_start = state.process_start;
 
-    // build our application with a single route
     let app = Router::new()
-        .route("/", get(|| async move {
-            Html("<!DOCTYPE html>\n<html><body><h1>Hoshi control plane!</h1></body></html>")
-        }))
+        .route("/", get(index_get))
         .with_state(state.clone());
 
     println!(

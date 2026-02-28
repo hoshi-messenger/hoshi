@@ -2,7 +2,7 @@
 
 use std::future::Future;
 
-use hoshi_control_plane::{Config, State, create_listeners, run};
+use hoshi_control_plane::{Config, ServerState, create_listeners, run};
 use tempfile::TempDir;
 
 /// Helper function to run integration tests with a temporary backend
@@ -15,7 +15,7 @@ use tempfile::TempDir;
 /// - Cleans up after the test completes
 pub async fn with_backend<F, Fut>(test: F)
 where
-    F: FnOnce(State) -> Fut,
+    F: FnOnce(ServerState) -> Fut,
     Fut: Future<Output = ()>,
 {
     let process_start = std::time::Instant::now();
@@ -40,7 +40,7 @@ where
 
     // Update config with actual addresses
     let config = config.update_bound_addresses(http_addr);
-    let state = State::new(config, process_start).expect("State");
+    let state = ServerState::new(config, process_start).expect("State");
 
     // Pass state to test - it can access:
     // - state.config.base_url for HTTP requests

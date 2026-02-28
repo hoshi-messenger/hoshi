@@ -5,13 +5,13 @@ use anyhow::Result;
 use crate::{Config, database::Database};
 
 #[derive(Debug, Clone)]
-pub struct State {
+pub struct ServerState {
     pub process_start: Instant,
     pub config: Arc<Config>,
     pub db: Database,
 }
 
-impl State {
+impl ServerState {
     /// Create a new GlobalState instance
     pub fn new(config: Config, process_start: Instant) -> Result<Self> {
         std::fs::create_dir_all(&config.dir_root)?;

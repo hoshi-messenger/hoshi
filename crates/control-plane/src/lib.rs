@@ -1,6 +1,7 @@
 mod config;
 mod client;
 mod database;
+mod routes;
 mod http;
 mod state;
 mod utils;
@@ -9,8 +10,9 @@ use std::{net::SocketAddr, time::Duration};
 
 pub use config::Config;
 use sd_notify::{NotifyState, notify};
-pub use state::State;
+pub use state::ServerState;
 pub(crate) use utils::now;
+pub(crate) use routes::*;
 pub use database::Database;
 pub use client::{Client, ClientType};
 use tokio::{net::{TcpListener, TcpSocket}, runtime::Builder, time::interval};
@@ -44,7 +46,7 @@ fn systemd_integration() {
 }
 
 pub async fn run<T: Future>(
-    state: State,
+    state: ServerState,
     http_listener: TcpListener,
     kill: T,
 ) {
@@ -129,7 +131,7 @@ pub fn run_multi_thread(config: Config, process_start: std::time::Instant) {
         // Update config with actual addresses
         let config = config.update_bound_addresses(http_addr);
 
-        let state = State::new(config, process_start)
+        let state = ServerState::new(config, process_start)
             .expect("Error creating State from Config");
 
         let kill = std::future::pending::<()>();
