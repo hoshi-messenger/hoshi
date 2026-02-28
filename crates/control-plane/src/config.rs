@@ -1,0 +1,51 @@
+use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, path::PathBuf};
+
+use anyhow::Result;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub dir_root: PathBuf,
+    pub http_bind_address: SocketAddr,
+    pub reuse_port: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        let dir_root = dirs::home_dir()
+            .map(|h| h.join(".hoshi"))
+            .unwrap_or_else(|| PathBuf::from("./.hoshi"));
+
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let port = 2600;
+        let http_bind_address = SocketAddr::new(ip, port);
+
+        Self {
+            dir_root,
+            http_bind_address,
+            reuse_port: false,
+        }
+    }
+}
+
+impl Config {
+    pub fn new() -> Result<Self> {
+        let dir_root = dirs::home_dir()
+            .map(|h| h.join(".hoshi"))
+            .unwrap_or_else(|| PathBuf::from("./.hoshi"));
+
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let port = 2600;
+        let http_bind_address = SocketAddr::new(ip, port);
+
+        Ok (Self {
+            dir_root,
+            http_bind_address,
+            reuse_port: false,
+        })
+    }
+
+    pub fn update_bound_addresses(mut self, http_addr: SocketAddr) -> Self {
+        self.http_bind_address = http_addr;
+        self
+    }
+}
