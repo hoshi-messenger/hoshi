@@ -1,13 +1,15 @@
+use std::net::SocketAddr;
+
 use axum::{
     Json,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    extract::{ConnectInfo, Path, State},
+    http::StatusCode,
     response::{Html, IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 use crate::api::{
-    ErrorResponse, LookupClientResponse, RegisterClientRequest, RegisterRelayRequest,
+    ErrorResponse, LookupClientResponse, RegisterClientRequest, RegisterRelayRequest, RelayEntry,
 };
 use crate::{Client, ClientType, ServerState, utils::response_html};
 
@@ -78,27 +80,52 @@ pub async fn lookup_client_get(
 }
 
 pub async fn register_relay_post(
-    State(_state): State<ServerState>,
-    headers: HeaderMap,
+    State(state): State<ServerState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<RegisterRelayRequest>,
 ) -> Response {
-    let Some(api_key) = headers
-        .get("x-api-key")
-        .and_then(|value| value.to_str().ok())
-    else {
-        return error_response(StatusCode::UNAUTHORIZED, "missing x-api-key");
+    if let Err(err) = state.db.validate_relay_api_key(&payload.api_key) {
+        return error_response(StatusCode::UNAUTHORIZED, err.to_string());
+    }
+
+    let guid = match uuid::Uuid::parse_str(&payload.guid) {
+        Ok(guid) => guid.to_string(),
+        Err(_) => return error_response(StatusCode::BAD_REQUEST, "invalid guid"),
     };
 
-    if api_key.trim().is_empty() {
-        return error_response(StatusCode::UNAUTHORIZED, "missing x-api-key");
+    let canonical_public_key = match canonicalize_base64(&payload.public_key) {
+        Ok(value) => value,
+        Err(_) => return error_response(StatusCode::BAD_REQUEST, "invalid public_key base64"),
+    };
+
+    if payload.port == 0 {
+        return error_response(StatusCode::BAD_REQUEST, "invalid port");
     }
 
-    if canonicalize_base64(&payload.public_key).is_err() {
-        return error_response(StatusCode::BAD_REQUEST, "invalid public_key base64");
-    }
+    let relay = RelayEntry {
+        guid: guid.clone(),
+        public_key: canonical_public_key,
+        ip: peer_addr.ip().to_string(),
+        port: payload.port,
+    };
 
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "relay registration not implemented yet",
-    )
+    let already_exists = state.relays.insert(guid, relay.clone()).is_some();
+    let status = if already_exists {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+
+    (status, Json(relay)).into_response()
+}
+
+pub async fn list_relays_get(State(state): State<ServerState>) -> Response {
+    let mut relays: Vec<RelayEntry> = state
+        .relays
+        .iter()
+        .map(|entry| entry.value().clone())
+        .collect();
+    relays.sort_by(|a, b| a.guid.cmp(&b.guid));
+
+    (StatusCode::OK, Json(relays)).into_response()
 }

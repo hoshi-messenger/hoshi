@@ -12,6 +12,8 @@ pub struct Database {
 }
 
 impl Database {
+    pub const RELAY_API_KEY_CONFIG_KEY: &'static str = "relay_api_key";
+
     pub fn new(config: &Config) -> Result<Self> {
         let db = if config.db_name == ":memory:" {
             Connection::open_in_memory()
@@ -73,6 +75,32 @@ impl Database {
             rusqlite::params![key, value],
         )?;
         Ok(())
+    }
+
+    pub fn validate_relay_api_key(&self, api_key: &str) -> Result<()> {
+        let Some(expected_api_key) = self.get_relay_api_key()? else {
+            return Err(anyhow!("invalid api key"));
+        };
+
+        if api_key == expected_api_key {
+            return Ok(());
+        }
+
+        Err(anyhow!("invalid api key"))
+    }
+
+    pub fn get_relay_api_key(&self) -> Result<Option<String>> {
+        let Some(raw_value) = self.get_config(Self::RELAY_API_KEY_CONFIG_KEY)? else {
+            return Ok(None);
+        };
+
+        let value = String::from_utf8(raw_value)
+            .map_err(|_| anyhow!("Invalid UTF-8 value for relay_api_key"))?;
+        Ok(Some(value))
+    }
+
+    pub fn set_relay_api_key(&self, api_key: &str) -> Result<()> {
+        self.set_config(Self::RELAY_API_KEY_CONFIG_KEY, api_key.as_bytes())
     }
 
     // Clients

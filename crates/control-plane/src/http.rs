@@ -6,7 +6,10 @@ use axum::{
 };
 use tokio::net::TcpListener;
 
-use crate::{ServerState, index_get, lookup_client_get, register_client_post, register_relay_post};
+use crate::{
+    ServerState, index_get, list_relays_get, lookup_client_get, register_client_post,
+    register_relay_post,
+};
 
 pub async fn http_server(
     state: ServerState,
@@ -19,7 +22,7 @@ pub async fn http_server(
         .route("/", get(index_get))
         .route("/clients", post(register_client_post))
         .route("/clients/{guid}", get(lookup_client_get))
-        .route("/relays", post(register_relay_post))
+        .route("/relays", get(list_relays_get).post(register_relay_post))
         .with_state(state.clone());
 
     println!(

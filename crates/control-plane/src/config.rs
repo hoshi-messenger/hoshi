@@ -1,4 +1,5 @@
 use std::{
+    env,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
 };
@@ -11,6 +12,14 @@ pub struct Config {
     pub http_bind_address: SocketAddr,
     pub reuse_port: bool,
     pub db_name: String,
+    pub relay_api_key: Option<String>,
+}
+
+fn relay_api_key_from_env() -> Option<String> {
+    env::var("HOSHI_RELAY_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 impl Default for Config {
@@ -29,6 +38,7 @@ impl Default for Config {
             http_bind_address,
             reuse_port: false,
             db_name,
+            relay_api_key: relay_api_key_from_env(),
         }
     }
 }
@@ -49,6 +59,7 @@ impl Config {
             http_bind_address,
             reuse_port: false,
             db_name,
+            relay_api_key: relay_api_key_from_env(),
         })
     }
 
@@ -75,6 +86,11 @@ impl Config {
 
     pub fn set_db_name(mut self, db_name: &str) -> Self {
         self.db_name = db_name.to_string();
+        self
+    }
+
+    pub fn set_relay_api_key(mut self, relay_api_key: &str) -> Self {
+        self.relay_api_key = Some(relay_api_key.to_string());
         self
     }
 }

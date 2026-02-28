@@ -32,6 +32,7 @@ where
     let config = Config::default()
         .set_dir_root(dir_root)
         .set_db_name(":memory:")
+        .set_relay_api_key("test-relay-api-key")
         .set_http_bind_addr("127.0.0.1:0")
         .expect("set_http_bind_addr");
 

@@ -23,5 +23,15 @@ pub struct LookupClientResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterRelayRequest {
     pub public_key: String,
-    pub guid: Option<String>,
+    pub guid: String,
+    pub api_key: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayEntry {
+    pub guid: String,
+    pub public_key: String,
+    pub ip: String,
+    pub port: u16,
 }

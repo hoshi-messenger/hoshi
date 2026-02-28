@@ -1,7 +1,7 @@
 pub use hoshi_control_plane::Client as ClientEntry;
 pub use hoshi_control_plane::ClientType;
 pub use hoshi_control_plane::api::{
-    ErrorResponse, LookupClientResponse, RegisterClientRequest, RegisterRelayRequest,
+    ErrorResponse, LookupClientResponse, RegisterClientRequest, RegisterRelayRequest, RelayEntry,
 };
 use reqwest::Client;
 
@@ -39,18 +39,19 @@ impl ControlPlaneApi {
 
     pub async fn register_relay(
         &self,
-        api_key: Option<&str>,
         req: &RegisterRelayRequest,
     ) -> reqwest::Result<reqwest::Response> {
-        let mut request = self
-            .client
+        self.client
             .post(format!("{}/relays", self.base_uri))
-            .json(req);
+            .json(req)
+            .send()
+            .await
+    }
 
-        if let Some(api_key) = api_key {
-            request = request.header("x-api-key", api_key);
-        }
-
-        request.send().await
+    pub async fn list_relays(&self) -> reqwest::Result<reqwest::Response> {
+        self.client
+            .get(format!("{}/relays", self.base_uri))
+            .send()
+            .await
     }
 }
