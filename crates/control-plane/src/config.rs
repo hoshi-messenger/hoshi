@@ -48,4 +48,20 @@ impl Config {
         self.http_bind_address = http_addr;
         self
     }
+
+    pub fn set_dir_root(mut self, dir_root: &str) -> Self {
+        let dir_root = PathBuf::from(dir_root);
+        self.dir_root = dir_root;
+        self
+    }
+
+    pub fn set_http_bind_addr(mut self, bind_addr: &str) -> Result<Self> {
+        let addr = bind_addr.parse::<SocketAddr>()?;
+        self.http_bind_address = addr;
+        Ok(self)
+    }
+
+    pub fn uri(&self) -> String {
+        format!("http://{}", self.http_bind_address.to_string())
+    }
 }

@@ -48,6 +48,7 @@
                   pkg-config
                   rustc
                   cargo
+                  cargo-nextest
                   rustfmt
                   clippy
                   rust-analyzer
