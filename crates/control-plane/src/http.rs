@@ -7,8 +7,8 @@ use axum::{
 use tokio::net::TcpListener;
 
 use crate::{
-    ServerState, index_get, list_relays_get, lookup_client_get, register_client_post,
-    register_relay_post,
+    ServerState, index_get, list_relays_get, lookup_client_get, noise_public_key_get,
+    register_client_post, register_relay_post,
 };
 
 pub async fn http_server(
@@ -20,6 +20,7 @@ pub async fn http_server(
 
     let app = Router::new()
         .route("/", get(index_get))
+        .route("/noise/public-key", get(noise_public_key_get))
         .route("/clients", post(register_client_post))
         .route("/clients/{guid}", get(lookup_client_get))
         .route("/relays", get(list_relays_get).post(register_relay_post))

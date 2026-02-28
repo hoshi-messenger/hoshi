@@ -3,6 +3,7 @@ mod client;
 mod config;
 mod database;
 mod http;
+mod noise;
 mod routes;
 mod state;
 mod utils;

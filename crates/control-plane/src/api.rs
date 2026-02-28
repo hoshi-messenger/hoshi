@@ -12,6 +12,7 @@ pub struct RegisterClientRequest {
     pub public_key: String,
     pub owner_id: Option<String>,
     pub client_type: ClientType,
+    pub noise_handshake: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +27,13 @@ pub struct RegisterRelayRequest {
     pub guid: String,
     pub api_key: String,
     pub port: u16,
+    pub noise_handshake: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoisePublicKeyResponse {
+    pub pattern: String,
+    pub public_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

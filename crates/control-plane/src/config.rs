@@ -13,10 +13,18 @@ pub struct Config {
     pub reuse_port: bool,
     pub db_name: String,
     pub relay_api_key: Option<String>,
+    pub noise_static_private_key: Option<String>,
 }
 
 fn relay_api_key_from_env() -> Option<String> {
     env::var("HOSHI_RELAY_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn noise_static_private_key_from_env() -> Option<String> {
+    env::var("HOSHI_NOISE_STATIC_PRIVATE_KEY")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -39,6 +47,7 @@ impl Default for Config {
             reuse_port: false,
             db_name,
             relay_api_key: relay_api_key_from_env(),
+            noise_static_private_key: noise_static_private_key_from_env(),
         }
     }
 }
@@ -60,6 +69,7 @@ impl Config {
             reuse_port: false,
             db_name,
             relay_api_key: relay_api_key_from_env(),
+            noise_static_private_key: noise_static_private_key_from_env(),
         })
     }
 
@@ -91,6 +101,11 @@ impl Config {
 
     pub fn set_relay_api_key(mut self, relay_api_key: &str) -> Self {
         self.relay_api_key = Some(relay_api_key.to_string());
+        self
+    }
+
+    pub fn set_noise_static_private_key(mut self, noise_static_private_key: &str) -> Self {
+        self.noise_static_private_key = Some(noise_static_private_key.to_string());
         self
     }
 }

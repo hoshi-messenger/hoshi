@@ -1,7 +1,8 @@
 pub use hoshi_control_plane::Client as ClientEntry;
 pub use hoshi_control_plane::ClientType;
 pub use hoshi_control_plane::api::{
-    ErrorResponse, LookupClientResponse, RegisterClientRequest, RegisterRelayRequest, RelayEntry,
+    ErrorResponse, LookupClientResponse, NoisePublicKeyResponse, RegisterClientRequest,
+    RegisterRelayRequest, RelayEntry,
 };
 use reqwest::Client;
 
@@ -51,6 +52,13 @@ impl ControlPlaneApi {
     pub async fn list_relays(&self) -> reqwest::Result<reqwest::Response> {
         self.client
             .get(format!("{}/relays", self.base_uri))
+            .send()
+            .await
+    }
+
+    pub async fn get_noise_public_key(&self) -> reqwest::Result<reqwest::Response> {
+        self.client
+            .get(format!("{}/noise/public-key", self.base_uri))
             .send()
             .await
     }
