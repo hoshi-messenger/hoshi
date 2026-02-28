@@ -2,11 +2,40 @@ mod config;
 mod http;
 mod state;
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 pub use config::Config;
+use sd_notify::{NotifyState, notify};
 pub use state::State;
-use tokio::{net::{TcpListener, TcpSocket}, runtime::Builder};
+use tokio::{net::{TcpListener, TcpSocket}, runtime::Builder, time::interval};
+
+fn systemd_integration() {
+    // Tell systemd we are ready (no-op if not under systemd)
+    let _ = notify(false, &[NotifyState::Ready]);
+
+    // WATCHDOG_USEC is only set if watchdog is enabled *and* systemd manages us
+    let watchdog_usec = match std::env::var("WATCHDOG_USEC") {
+        Ok(v) => v.parse::<u64>().ok(),
+        Err(_) => None,
+    };
+
+    let watchdog_usec = match watchdog_usec {
+        Some(v) if v > 0 => v,
+        _ => return, // no watchdog → nothing to do
+    };
+
+    // systemd recommends pinging at least every WatchdogSec / 2
+    let interval_duration = Duration::from_micros(watchdog_usec / 2);
+
+    tokio::spawn(async move {
+        let mut ticker = interval(interval_duration);
+
+        loop {
+            ticker.tick().await;
+            let _ = notify(false, &[NotifyState::Watchdog]);
+        }
+    });
+}
 
 pub async fn run<T: Future>(
     state: State,
@@ -32,6 +61,9 @@ pub async fn run<T: Future>(
         .expect("Couldn't start http_server");
     
     println!("[{:?}] - Hoshi control plane ready", state.process_start.elapsed());
+
+    // Tell systemd we're ready and start watchdog
+    systemd_integration();
 
     tokio::select! {
         http_res = http_server => {
