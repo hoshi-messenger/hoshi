@@ -116,6 +116,8 @@ pub fn create_listener(addr: SocketAddr, reuse_port: bool) -> std::io::Result<Tc
 
     #[cfg(target_os = "linux")]
     socket.set_reuseport(reuse_port)?;
+    #[cfg(not(target_os = "linux"))]
+    let _ = reuse_port;
 
     socket.bind(addr)?;
     socket.listen(1024)
