@@ -1,0 +1,26 @@
+[workspace]
+members = [
+    "crates/control-plane",
+    "crates/relay",
+]
+resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+anyhow = { version = "1" }
+axum = { version = "0.8" }
+serde_json = { version = "1" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+argon2 = { version = "0.5" }
+password-hash = { version = "0.5" }
+rand_core = { version = "0.6", features = ["std"] }
+uuid = { version = "1", features = ["v7"] }
+jsonwebtoken = { version = "9" }
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+x25519-dalek = { version = "2" }
+base64 = { version = "0.22" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
