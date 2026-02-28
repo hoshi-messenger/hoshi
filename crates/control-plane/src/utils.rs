@@ -10,6 +10,8 @@ pub fn now() -> i64 {
 }
 
 pub fn response_html(body: &str, title: &str) -> Html<String> {
-    let body = format!("<!DOCTYPE html>\n<html><head><title>{title}</title></head><body>{body}</body></html>");
+    let body = format!(
+        "<!DOCTYPE html>\n<html><head><title>{title}</title></head><body>{body}</body></html>"
+    );
     body.into()
 }

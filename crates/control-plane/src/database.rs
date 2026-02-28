@@ -1,10 +1,10 @@
-use std::{sync::{Arc, Mutex}};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
-use rusqlite::Connection;
+use rusqlite::{Connection, Row};
 
-use crate::{Config, now};
 use crate::Client;
+use crate::{Config, now};
 
 #[derive(Debug, Clone)]
 pub struct Database {
@@ -20,22 +20,24 @@ impl Database {
         }?;
         let conn = Arc::new(Mutex::new(db));
 
-        Ok(Self {
-            conn,
-        })
+        Ok(Self { conn })
     }
 
     pub fn init(&self) -> Result<()> {
-        let conn = self.conn.lock().map_err(|_| anyhow!("Couldn't lock DB for init"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow!("Couldn't lock DB for init"))?;
 
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             PRAGMA journal_mode=WAL;
             
             CREATE TABLE IF NOT EXISTS clients (
                 id TEXT PRIMARY KEY,
                 owner_id TEXT REFERENCES clients(id),
                 client_type TEXT NOT NULL,
-                public_key BLOB NOT NULL,
+                public_key TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 last_seen INTEGER NOT NULL
             );
@@ -44,7 +46,14 @@ impl Database {
                 key TEXT PRIMARY KEY,
                 value BLOB NOT NULL
             );
-        ")?;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_public_key
+            ON clients(public_key);
+
+            CREATE INDEX IF NOT EXISTS idx_clients_owner_id
+            ON clients(owner_id);
+        ",
+        )?;
 
         Ok(())
     }
@@ -67,6 +76,19 @@ impl Database {
     }
 
     // Clients
+    fn row_to_client(row: &Row<'_>) -> Result<Client> {
+        let client_type_str: String = row.get(2)?;
+        let owner_id: Option<String> = row.get(1)?;
+        Ok(Client {
+            id: row.get(0)?,
+            owner_id,
+            client_type: client_type_str.parse()?,
+            public_key: row.get(3)?,
+            created_at: row.get(4)?,
+            last_seen: row.get(5)?,
+        })
+    }
+
     pub fn insert_client(&self, client: &Client) -> Result<()> {
         let conn = self.conn.lock().map_err(|_| anyhow!("Couldn't lock DB"))?;
         conn.execute(
@@ -88,20 +110,70 @@ impl Database {
         let conn = self.conn.lock().map_err(|_| anyhow!("Couldn't lock DB"))?;
         let mut stmt = conn.prepare(
             "SELECT id, owner_id, client_type, public_key, created_at, last_seen
-            FROM clients WHERE id = ?1"
+            FROM clients WHERE id = ?1",
         )?;
         let mut rows = stmt.query([id])?;
-        let Some(row) = rows.next()? else { return Ok(None) };
-        let client_type_str: String = row.get(2)?;
-        let owner_id: Option<String> = row.get(1)?;
-        Ok(Some(Client {
-            id: row.get(0)?,
-            owner_id,
-            client_type: client_type_str.parse()?,
-            public_key: row.get(3)?,
-            created_at: row.get(4)?,
-            last_seen: row.get(5)?,
-        }))
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(Self::row_to_client(row)?))
+    }
+
+    pub fn get_client_by_public_key(&self, public_key: &str) -> Result<Option<Client>> {
+        let conn = self.conn.lock().map_err(|_| anyhow!("Couldn't lock DB"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, owner_id, client_type, public_key, created_at, last_seen
+            FROM clients WHERE public_key = ?1",
+        )?;
+        let mut rows = stmt.query([public_key])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(Self::row_to_client(row)?))
+    }
+
+    pub fn get_client_with_children(&self, id: &str) -> Result<Option<(Client, Vec<Client>)>> {
+        let conn = self.conn.lock().map_err(|_| anyhow!("Couldn't lock DB"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, owner_id, client_type, public_key, created_at, last_seen
+            FROM clients
+            WHERE id = ?1 OR owner_id = ?1
+            ORDER BY CASE WHEN id = ?1 THEN 0 ELSE 1 END, created_at ASC",
+        )?;
+        let mut rows = stmt.query([id])?;
+
+        let mut parent: Option<Client> = None;
+        let mut children = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let client = Self::row_to_client(row)?;
+            if client.id == id {
+                parent = Some(client);
+            } else {
+                children.push(client);
+            }
+        }
+
+        match parent {
+            Some(parent) => Ok(Some((parent, children))),
+            None => Ok(None),
+        }
+    }
+
+    pub fn list_children(&self, owner_id: &str) -> Result<Vec<Client>> {
+        let conn = self.conn.lock().map_err(|_| anyhow!("Couldn't lock DB"))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, owner_id, client_type, public_key, created_at, last_seen
+            FROM clients WHERE owner_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let mut rows = stmt.query([owner_id])?;
+        let mut out = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            out.push(Self::row_to_client(row)?);
+        }
+
+        Ok(out)
     }
 
     pub fn touch_client(&self, id: &str) -> Result<()> {

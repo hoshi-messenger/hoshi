@@ -1,9 +1,12 @@
 use std::net::SocketAddr;
 
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use tokio::net::TcpListener;
 
-use crate::{ServerState, index_get};
+use crate::{ServerState, index_get, lookup_client_get, register_client_post, register_relay_post};
 
 pub async fn http_server(
     state: ServerState,
@@ -14,6 +17,9 @@ pub async fn http_server(
 
     let app = Router::new()
         .route("/", get(index_get))
+        .route("/clients", post(register_client_post))
+        .route("/clients/{guid}", get(lookup_client_get))
+        .route("/relays", post(register_relay_post))
         .with_state(state.clone());
 
     println!(

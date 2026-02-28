@@ -1,4 +1,7 @@
-use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, path::PathBuf};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+};
 
 use anyhow::Result;
 
@@ -41,7 +44,7 @@ impl Config {
         let http_bind_address = SocketAddr::new(ip, port);
         let db_name = "control_plane.sqlite3".to_string();
 
-        Ok (Self {
+        Ok(Self {
             dir_root,
             http_bind_address,
             reuse_port: false,

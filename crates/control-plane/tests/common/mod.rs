@@ -5,6 +5,9 @@ use std::future::Future;
 use hoshi_control_plane::{Config, ServerState, create_listeners, run};
 use tempfile::TempDir;
 
+mod api;
+pub use api::*;
+
 /// Helper function to run integration tests with a temporary backend
 ///
 /// This function:
@@ -33,8 +36,7 @@ where
         .expect("set_http_bind_addr");
 
     // Create listeners and get actual ports
-    let (http_listener, http_addr) =
-        create_listeners(&config).expect("Failed to create listeners");
+    let (http_listener, http_addr) = create_listeners(&config).expect("Failed to create listeners");
 
     println!("HTTP bound to: {}", http_addr);
 

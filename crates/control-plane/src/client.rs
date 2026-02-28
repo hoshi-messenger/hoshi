@@ -1,33 +1,39 @@
 use std::{fmt, str::FromStr};
 
 use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
 
 use crate::now;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ClientType {
     User,
     Device,
     Relay,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Client {
     pub id: String,
     pub owner_id: Option<String>,
     pub client_type: ClientType,
-    pub public_key: Vec<u8>,
+    pub public_key: String,
     pub created_at: i64,
     pub last_seen: i64,
 }
 
 impl Client {
-    pub fn create_client(owner_id: Option<&str>, client_type: ClientType, public_key: &[u8]) -> Self {
+    pub fn create_client(
+        owner_id: Option<&str>,
+        client_type: ClientType,
+        public_key: &str,
+    ) -> Self {
         Self {
             id: uuid::Uuid::now_v7().to_string(),
             owner_id: owner_id.map(str::to_string),
             client_type,
-            public_key: public_key.to_vec(),
+            public_key: public_key.to_string(),
             created_at: now(),
             last_seen: now(),
         }
