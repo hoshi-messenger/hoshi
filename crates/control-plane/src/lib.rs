@@ -8,23 +8,27 @@ mod routes;
 mod state;
 mod utils;
 
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 
 pub use api::*;
 pub use client::{Client, ClientType};
 pub use config::Config;
 pub use database::Database;
 pub(crate) use routes::*;
-use sd_notify::{NotifyState, notify};
+
 pub use state::ServerState;
 use tokio::{
     net::{TcpListener, TcpSocket},
     runtime::Builder,
-    time::interval,
 };
 pub(crate) use utils::now;
 
+#[cfg(target_os = "linux")]
 fn systemd_integration() {
+    use std::time::Duration;
+    use sd_notify::{NotifyState, notify};
+    use tokio::time::interval;
+
     // Tell systemd we are ready (no-op if not under systemd)
     let _ = notify(false, &[NotifyState::Ready]);
 
@@ -81,7 +85,7 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
         state.process_start.elapsed()
     );
 
-    // Tell systemd we're ready and start watchdog
+    #[cfg(target_os = "linux")]
     systemd_integration();
 
     tokio::select! {
