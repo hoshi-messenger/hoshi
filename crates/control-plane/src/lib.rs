@@ -1,12 +1,18 @@
 mod config;
+mod client;
+mod database;
 mod http;
 mod state;
+mod utils;
 
 use std::{net::SocketAddr, time::Duration};
 
 pub use config::Config;
 use sd_notify::{NotifyState, notify};
 pub use state::State;
+pub(crate) use utils::now;
+pub use database::Database;
+pub use client::{Client, ClientType};
 use tokio::{net::{TcpListener, TcpSocket}, runtime::Builder, time::interval};
 
 fn systemd_integration() {
@@ -44,6 +50,8 @@ pub async fn run<T: Future>(
 ) {
     println!("[{:?}] - Hoshi control plane started", state.process_start.elapsed());
 
+    // First make sure the DB is alright
+    state.db.init().expect("Can't init DB");
 
     #[cfg(unix)]
     let terminate = async {

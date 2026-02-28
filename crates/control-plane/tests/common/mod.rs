@@ -28,6 +28,7 @@ where
     // Bind to port 0 for OS-assigned ports
     let config = Config::default()
         .set_dir_root(dir_root)
+        .set_db_name(":memory:")
         .set_http_bind_addr("127.0.0.1:0")
         .expect("set_http_bind_addr");
 

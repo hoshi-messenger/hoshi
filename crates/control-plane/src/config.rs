@@ -7,6 +7,7 @@ pub struct Config {
     pub dir_root: PathBuf,
     pub http_bind_address: SocketAddr,
     pub reuse_port: bool,
+    pub db_name: String,
 }
 
 impl Default for Config {
@@ -18,11 +19,13 @@ impl Default for Config {
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let port = 2600;
         let http_bind_address = SocketAddr::new(ip, port);
+        let db_name = "control_plane.sqlite3".to_string();
 
         Self {
             dir_root,
             http_bind_address,
             reuse_port: false,
+            db_name,
         }
     }
 }
@@ -36,11 +39,13 @@ impl Config {
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let port = 2600;
         let http_bind_address = SocketAddr::new(ip, port);
+        let db_name = "control_plane.sqlite3".to_string();
 
         Ok (Self {
             dir_root,
             http_bind_address,
             reuse_port: false,
+            db_name,
         })
     }
 
@@ -63,5 +68,10 @@ impl Config {
 
     pub fn uri(&self) -> String {
         format!("http://{}", self.http_bind_address.to_string())
+    }
+
+    pub fn set_db_name(mut self, db_name: &str) -> Self {
+        self.db_name = db_name.to_string();
+        self
     }
 }

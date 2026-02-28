@@ -25,3 +25,42 @@ async fn basic_http() {
     })
     .await;
 }
+
+
+#[tokio::test]
+async fn basic_config_db_tests() {
+    with_backend(|state| async move {
+        let val = state.db.get_config("test").unwrap();
+        assert!(
+            val.is_none(),
+            "'test' has a value before we set it"
+        );
+
+        state.db.set_config("test", b"123").unwrap();
+        let val = state.db.get_config("test").unwrap().unwrap();
+        assert_eq!(
+            val,
+            b"123"
+        );
+
+        state.db.set_config("test", b"").unwrap();
+        let val = state.db.get_config("test").unwrap().unwrap();
+        assert_eq!(
+            val,
+            b""
+        );
+
+        let mut vec: Vec<u8> = Vec::new();
+        for i in 1..4096 {
+            let v = i as u8;
+            vec.push(v);
+        }
+        state.db.set_config("test", &vec).unwrap();
+        let val = state.db.get_config("test").unwrap().unwrap();
+        assert_eq!(
+            val,
+            vec
+        );
+    })
+    .await;
+}
