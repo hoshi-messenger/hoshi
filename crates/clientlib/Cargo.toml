@@ -16,7 +16,7 @@ rand_core = { workspace = true }
 dirs = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
-hoshi-protocol = { workspace = true }
+hoshi-protocol = { path = "../protocol" }
 tokio-rusqlite = { workspace = true }
 uuid = { workspace = true }
 

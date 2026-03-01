@@ -6,5 +6,6 @@ publish = false
 
 [dependencies]
 tempfile = { workspace = true }
+
 hoshi-control-plane = { path = "../control-plane" }
 hoshi-relay = { path = "../relay" }
