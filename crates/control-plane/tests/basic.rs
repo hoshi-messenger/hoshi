@@ -1,9 +1,12 @@
 mod common;
 
+use std::future::Future;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use common::{
     ClientEntry, ClientType, ControlPlaneApi, ErrorResponse, LookupClientResponse,
-    NoisePublicKeyResponse, RegisterClientRequest, RegisterRelayRequest, RelayEntry, with_control_plane,
+    NoisePublicKeyResponse, RegisterClientRequest, RegisterRelayRequest, RelayEntry,
+    with_control_plane,
 };
 use hoshi_control_plane::{Config, ServerState};
 use reqwest::Client;
@@ -136,6 +139,18 @@ async fn register_client_created(api: &ControlPlaneApi, req: RegisterClientReque
     let res = api.register_client(&req).await.unwrap();
     assert_eq!(res.status(), StatusCode::CREATED);
     res.json::<ClientEntry>().await.unwrap()
+}
+
+async fn with_control_plane_api<F, Fut>(test: F)
+where
+    F: FnOnce(ServerState, ControlPlaneApi) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    with_control_plane(|state| async move {
+        let api = ControlPlaneApi::new(state.config.uri());
+        test(state, api).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -292,8 +307,7 @@ async fn basic_http() {
 
 #[tokio::test]
 async fn noise_public_key_endpoint_returns_pattern_and_valid_key() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|_state, api| async move {
         let res = api.get_noise_public_key().await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
 
@@ -333,8 +347,7 @@ async fn basic_config_db_tests() {
 
 #[tokio::test]
 async fn register_client_success_returns_201_and_entry() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|_state, api| async move {
         let (public_key, private_key) = generate_noise_keypair();
         let req = client_request(&api, &public_key, &private_key, None, ClientType::User).await;
 
@@ -354,8 +367,7 @@ async fn register_client_success_returns_201_and_entry() {
 
 #[tokio::test]
 async fn register_client_duplicate_public_key_returns_409() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|_state, api| async move {
         let (public_key, private_key) = generate_noise_keypair();
         let req = client_request(&api, &public_key, &private_key, None, ClientType::User).await;
 
@@ -372,8 +384,7 @@ async fn register_client_duplicate_public_key_returns_409() {
 
 #[tokio::test]
 async fn register_client_invalid_base64_returns_400() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|_state, api| async move {
         let req = RegisterClientRequest {
             public_key: "not-base64@@".to_string(),
             owner_id: None,
@@ -391,8 +402,7 @@ async fn register_client_invalid_base64_returns_400() {
 
 #[tokio::test]
 async fn register_client_invalid_noise_handshake_base64_returns_400() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|_state, api| async move {
         let (public_key, _) = generate_noise_keypair();
         let req = RegisterClientRequest {
             public_key,
@@ -411,8 +421,7 @@ async fn register_client_invalid_noise_handshake_base64_returns_400() {
 
 #[tokio::test]
 async fn register_client_invalid_registration_proof_returns_400() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|_state, api| async move {
         let (public_key, _) = generate_noise_keypair();
         let req = RegisterClientRequest {
             public_key,
@@ -431,8 +440,7 @@ async fn register_client_invalid_registration_proof_returns_400() {
 
 #[tokio::test]
 async fn register_client_rejects_proof_when_payload_is_tampered() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|_state, api| async move {
         let (public_key, private_key) = generate_noise_keypair();
         let mut req = client_request(&api, &public_key, &private_key, None, ClientType::User).await;
         req.owner_id = Some("tampered-owner".to_string());
@@ -447,8 +455,7 @@ async fn register_client_rejects_proof_when_payload_is_tampered() {
 
 #[tokio::test]
 async fn register_client_rejects_proof_when_signer_key_does_not_match_claimed_public_key() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|_state, api| async move {
         let (claimed_public_key, _) = generate_noise_keypair();
         let (_, wrong_private_key) = generate_noise_keypair();
         let req = client_request(
@@ -470,9 +477,7 @@ async fn register_client_rejects_proof_when_signer_key_does_not_match_claimed_pu
 
 #[tokio::test]
 async fn lookup_client_returns_parent_and_direct_children_only() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
-
+    with_control_plane_api(|_state, api| async move {
         let (parent_key, parent_private) = generate_noise_keypair();
         let parent = register_client_created(
             &api,
@@ -538,8 +543,7 @@ async fn lookup_client_returns_parent_and_direct_children_only() {
 
 #[tokio::test]
 async fn lookup_client_missing_returns_404() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|_state, api| async move {
         let res = api.lookup_client("missing-guid").await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
         let err = res.json::<ErrorResponse>().await.unwrap();
@@ -550,8 +554,7 @@ async fn lookup_client_missing_returns_404() {
 
 #[tokio::test]
 async fn register_relay_invalid_api_key_returns_401() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|_state, api| async move {
         let (public_key, _) = generate_noise_keypair();
         let req = relay_request_without_valid_proof(
             "11111111-1111-1111-1111-111111111111",
@@ -570,8 +573,7 @@ async fn register_relay_invalid_api_key_returns_401() {
 
 #[tokio::test]
 async fn register_relay_invalid_guid_returns_400() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|state, api| async move {
         let relay_api_key = state
             .config
             .relay_api_key
@@ -591,8 +593,7 @@ async fn register_relay_invalid_guid_returns_400() {
 
 #[tokio::test]
 async fn register_relay_invalid_public_key_returns_400() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|state, api| async move {
         let relay_api_key = state
             .config
             .relay_api_key
@@ -615,8 +616,7 @@ async fn register_relay_invalid_public_key_returns_400() {
 
 #[tokio::test]
 async fn register_relay_invalid_port_returns_400() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|state, api| async move {
         let relay_api_key = state
             .config
             .relay_api_key
@@ -640,8 +640,7 @@ async fn register_relay_invalid_port_returns_400() {
 
 #[tokio::test]
 async fn register_relay_invalid_registration_proof_returns_400() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|state, api| async move {
         let relay_api_key = state
             .config
             .relay_api_key
@@ -665,8 +664,7 @@ async fn register_relay_invalid_registration_proof_returns_400() {
 
 #[tokio::test]
 async fn register_relay_invalid_noise_handshake_base64_returns_400() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|state, api| async move {
         let relay_api_key = state
             .config
             .relay_api_key
@@ -691,8 +689,7 @@ async fn register_relay_invalid_noise_handshake_base64_returns_400() {
 
 #[tokio::test]
 async fn register_relay_rejects_proof_when_payload_is_tampered() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|state, api| async move {
         let relay_api_key = state
             .config
             .relay_api_key
@@ -720,8 +717,7 @@ async fn register_relay_rejects_proof_when_payload_is_tampered() {
 
 #[tokio::test]
 async fn register_relay_rejects_proof_when_signer_key_does_not_match_claimed_public_key() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|state, api| async move {
         let relay_api_key = state
             .config
             .relay_api_key
@@ -749,8 +745,7 @@ async fn register_relay_rejects_proof_when_signer_key_does_not_match_claimed_pub
 
 #[tokio::test]
 async fn list_relays_returns_flat_array_of_unique_entries() {
-    with_control_plane(|state| async move {
-        let api = ControlPlaneApi::new(state.config.uri());
+    with_control_plane_api(|state, api| async move {
         let relay_api_key = state
             .config
             .relay_api_key

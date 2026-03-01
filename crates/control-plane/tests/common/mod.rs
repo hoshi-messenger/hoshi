@@ -8,14 +8,9 @@ use tempfile::TempDir;
 mod api;
 pub use api::*;
 
-/// Helper function to run integration tests with a temporary backend
+/// Runs a control-plane instance for an integration test using a temporary data dir.
 ///
-/// This function:
-/// - Verifies git is available (with helpful error if not)
-/// - Creates a temporary directory for test data
-/// - Binds to port 0 for OS-assigned ports (enables parallel tests)
-/// - Passes the State to the test callback
-/// - Cleans up after the test completes
+/// This helper binds to `127.0.0.1:0` so tests can run in parallel.
 pub async fn with_control_plane<F, Fut>(test: F)
 where
     F: FnOnce(ServerState) -> Fut,
@@ -23,8 +18,10 @@ where
 {
     let process_start = std::time::Instant::now();
     let dir = TempDir::new().expect("Couldn't create TempDir");
-    let path = dir.path();
-    let dir_root = path.to_str().expect("Couldn't turn TempDir path to_str()");
+    let dir_root = dir
+        .path()
+        .to_str()
+        .expect("Couldn't turn TempDir path to_str()");
 
     println!("TempDir: {dir_root}");
 
@@ -48,14 +45,4 @@ where
         .expect("State");
 
     run(state.clone(), http_listener, test(state)).await;
-
-    std::fs::remove_dir_all(path).expect("Couldn't clean up TempDir");
-}
-
-pub async fn with_backend<F, Fut>(test: F)
-where
-    F: FnOnce(ServerState) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    with_control_plane(test).await;
 }
