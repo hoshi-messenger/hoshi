@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use jsonwebtoken::DecodingKey;
 use tokio::sync::RwLock;
 
@@ -27,8 +27,7 @@ pub struct ServerState {
     noise_static_private_key: Arc<[u8; 32]>,
     noise_public_key: Arc<String>,
     relay_jwt_decoding_key: Arc<RwLock<Option<DecodingKey>>>,
-    device_sessions: Arc<DashMap<String, sessions::SessionHandle>>,
-    client_devices: Arc<DashMap<String, DashSet<String>>>,
+    guid_sessions: Arc<DashMap<String, DashMap<u64, sessions::SessionHandle>>>,
     next_session_id: Arc<AtomicU64>,
 }
 
@@ -50,8 +49,7 @@ impl ServerState {
             noise_static_private_key: Arc::new(noise_static_private_key),
             noise_public_key: Arc::new(noise_public_key),
             relay_jwt_decoding_key: Arc::new(RwLock::new(None)),
-            device_sessions: Arc::new(DashMap::new()),
-            client_devices: Arc::new(DashMap::new()),
+            guid_sessions: Arc::new(DashMap::new()),
             next_session_id: Arc::new(AtomicU64::new(0)),
         })
     }

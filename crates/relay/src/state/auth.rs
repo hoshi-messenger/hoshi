@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use hoshi_protocol::control_plane::RelayJwtPublicKeyResponse;
+use hoshi_protocol::control_plane::{ClientType, RelayJwtPublicKeyResponse};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::Deserialize;
 use uuid::Uuid;
@@ -15,8 +15,7 @@ const JWT_KEY_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 struct RelayJwtClaims {
     sub: String,
     exp: i64,
-    client_guid: String,
-    device_guid: String,
+    client_type: ClientType,
 }
 
 impl ServerState {
@@ -93,24 +92,17 @@ impl ServerState {
             return Err(anyhow!("invalid relay token: missing subject"));
         }
 
-        if claims.sub != claims.device_guid {
-            return Err(anyhow!("invalid relay token: subject mismatch"));
-        }
-
         if claims.exp <= 0 {
             return Err(anyhow!("invalid relay token: bad exp"));
         }
 
-        let client_guid = Uuid::parse_str(&claims.client_guid)
-            .map_err(|_| anyhow!("invalid relay token: bad client_guid"))?
-            .to_string();
-        let device_guid = Uuid::parse_str(&claims.device_guid)
-            .map_err(|_| anyhow!("invalid relay token: bad device_guid"))?
+        let guid = Uuid::parse_str(&claims.sub)
+            .map_err(|_| anyhow!("invalid relay token: bad subject guid"))?
             .to_string();
 
         Ok(ConnectionIdentity {
-            client_guid,
-            device_guid,
+            guid,
+            client_type: claims.client_type,
         })
     }
 }

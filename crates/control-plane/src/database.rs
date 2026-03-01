@@ -15,7 +15,6 @@ pub struct Database {
 #[derive(Debug)]
 struct ClientRow {
     id: String,
-    owner_id: Option<String>,
     client_type: String,
     public_key: String,
     created_at: i64,
@@ -47,7 +46,6 @@ impl Database {
 
                     CREATE TABLE IF NOT EXISTS clients (
                         id TEXT PRIMARY KEY,
-                        owner_id TEXT REFERENCES clients(id),
                         client_type TEXT NOT NULL,
                         public_key TEXT NOT NULL,
                         created_at INTEGER NOT NULL,
@@ -61,14 +59,32 @@ impl Database {
 
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_public_key
                     ON clients(public_key);
-
-                    CREATE INDEX IF NOT EXISTS idx_clients_owner_id
-                    ON clients(owner_id);
                 ",
                 )?;
                 Ok(())
             })
             .await?;
+
+        let has_legacy_owner_id = self
+            .conn
+            .call(|conn| -> rusqlite::Result<bool> {
+                let mut stmt = conn.prepare("PRAGMA table_info(clients)")?;
+                let mut rows = stmt.query([])?;
+                while let Some(row) = rows.next()? {
+                    let column_name: String = row.get(1)?;
+                    if column_name == "owner_id" {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })
+            .await?;
+
+        if has_legacy_owner_id {
+            return Err(anyhow!(
+                "legacy clients schema detected (owner_id column); fresh database required"
+            ));
+        }
 
         Ok(())
     }
@@ -161,18 +177,16 @@ impl Database {
     fn row_to_client_row(row: &Row<'_>) -> rusqlite::Result<ClientRow> {
         Ok(ClientRow {
             id: row.get(0)?,
-            owner_id: row.get(1)?,
-            client_type: row.get(2)?,
-            public_key: row.get(3)?,
-            created_at: row.get(4)?,
-            last_seen: row.get(5)?,
+            client_type: row.get(1)?,
+            public_key: row.get(2)?,
+            created_at: row.get(3)?,
+            last_seen: row.get(4)?,
         })
     }
 
     fn client_from_row(row: ClientRow) -> Result<Client> {
         Ok(Client {
             id: row.id,
-            owner_id: row.owner_id,
             client_type: row.client_type.parse()?,
             public_key: row.public_key,
             created_at: row.created_at,
@@ -185,11 +199,10 @@ impl Database {
         self.conn
             .call(move |conn| -> rusqlite::Result<()> {
                 conn.execute(
-                    "INSERT INTO clients (id, owner_id, client_type, public_key, created_at, last_seen)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    "INSERT INTO clients (id, client_type, public_key, created_at, last_seen)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
                     rusqlite::params![
                         client.id,
-                        client.owner_id,
                         client.client_type.to_string(),
                         client.public_key,
                         client.created_at,
@@ -208,7 +221,7 @@ impl Database {
             .conn
             .call(move |conn| -> rusqlite::Result<Option<ClientRow>> {
                 let mut stmt = conn.prepare(
-                    "SELECT id, owner_id, client_type, public_key, created_at, last_seen
+                    "SELECT id, client_type, public_key, created_at, last_seen
                     FROM clients WHERE id = ?1",
                 )?;
                 let mut rows = stmt.query([id])?;
@@ -228,7 +241,7 @@ impl Database {
             .conn
             .call(move |conn| -> rusqlite::Result<Option<ClientRow>> {
                 let mut stmt = conn.prepare(
-                    "SELECT id, owner_id, client_type, public_key, created_at, last_seen
+                    "SELECT id, client_type, public_key, created_at, last_seen
                     FROM clients WHERE public_key = ?1",
                 )?;
                 let mut rows = stmt.query([public_key])?;

@@ -20,7 +20,6 @@ const NOISE_PATTERN: &str = "Noise_X_25519_ChaChaPoly_BLAKE2s";
 #[derive(Serialize)]
 struct ClientRegistrationProofPayload<'a> {
     public_key: &'a str,
-    owner_id: Option<&'a str>,
     client_type: &'a ClientType,
 }
 
@@ -42,8 +41,7 @@ struct RelayTokenClaims {
     sub: String,
     exp: i64,
     iat: i64,
-    client_guid: String,
-    device_guid: String,
+    client_type: ClientType,
 }
 
 fn generate_noise_keypair() -> (String, Vec<u8>) {
@@ -86,13 +84,11 @@ async fn client_request(
     api: &ControlPlaneApi,
     public_key: &str,
     private_key: &[u8],
-    owner_id: Option<&str>,
     client_type: ClientType,
 ) -> RegisterClientRequest {
     let server_noise = fetch_noise_public_key(api).await;
     let proof_payload = serde_json::to_vec(&ClientRegistrationProofPayload {
         public_key,
-        owner_id,
         client_type: &client_type,
     })
     .expect("serialize client proof payload");
@@ -101,7 +97,6 @@ async fn client_request(
 
     RegisterClientRequest {
         public_key: public_key.to_string(),
-        owner_id: owner_id.map(str::to_string),
         client_type,
         noise_handshake,
     }
@@ -381,7 +376,7 @@ async fn basic_config_db_tests() {
 async fn register_client_success_returns_201_and_entry() {
     with_control_plane_api(|_state, api| async move {
         let (public_key, private_key) = generate_noise_keypair();
-        let req = client_request(&api, &public_key, &private_key, None, ClientType::User).await;
+        let req = client_request(&api, &public_key, &private_key, ClientType::User).await;
 
         let res = api.register_client(&req).await.unwrap();
         assert_eq!(res.status(), StatusCode::CREATED);
@@ -395,18 +390,21 @@ async fn register_client_success_returns_201_and_entry() {
 }
 
 #[tokio::test]
-async fn register_client_duplicate_public_key_returns_409() {
+async fn register_client_duplicate_public_key_returns_existing_entry() {
     with_control_plane_api(|_state, api| async move {
         let (public_key, private_key) = generate_noise_keypair();
-        let req = client_request(&api, &public_key, &private_key, None, ClientType::User).await;
+        let req = client_request(&api, &public_key, &private_key, ClientType::User).await;
 
         let res = api.register_client(&req).await.unwrap();
         assert_eq!(res.status(), StatusCode::CREATED);
+        let first = res.json::<ClientEntry>().await.unwrap();
 
         let res = api.register_client(&req).await.unwrap();
-        assert_eq!(res.status(), StatusCode::CONFLICT);
-        let err = res.json::<ErrorResponse>().await.unwrap();
-        assert_eq!(err.error, "client already exists");
+        assert_eq!(res.status(), StatusCode::OK);
+        let second = res.json::<ClientEntry>().await.unwrap();
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.public_key, first.public_key);
+        assert_eq!(second.client_type, first.client_type);
     })
     .await;
 }
@@ -416,7 +414,6 @@ async fn register_client_invalid_base64_returns_400() {
     with_control_plane_api(|_state, api| async move {
         let req = RegisterClientRequest {
             public_key: "not-base64@@".to_string(),
-            owner_id: None,
             client_type: ClientType::User,
             noise_handshake: "AQID".to_string(),
         };
@@ -435,7 +432,6 @@ async fn register_client_invalid_noise_handshake_base64_returns_400() {
         let (public_key, _) = generate_noise_keypair();
         let req = RegisterClientRequest {
             public_key,
-            owner_id: None,
             client_type: ClientType::User,
             noise_handshake: "not-base64@@".to_string(),
         };
@@ -454,7 +450,6 @@ async fn register_client_invalid_registration_proof_returns_400() {
         let (public_key, _) = generate_noise_keypair();
         let req = RegisterClientRequest {
             public_key,
-            owner_id: None,
             client_type: ClientType::User,
             noise_handshake: "AQID".to_string(),
         };
@@ -471,8 +466,8 @@ async fn register_client_invalid_registration_proof_returns_400() {
 async fn register_client_rejects_proof_when_payload_is_tampered() {
     with_control_plane_api(|_state, api| async move {
         let (public_key, private_key) = generate_noise_keypair();
-        let mut req = client_request(&api, &public_key, &private_key, None, ClientType::User).await;
-        req.owner_id = Some("tampered-owner".to_string());
+        let mut req = client_request(&api, &public_key, &private_key, ClientType::User).await;
+        req.client_type = ClientType::Device;
 
         let res = api.register_client(&req).await.unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
@@ -491,7 +486,6 @@ async fn register_client_rejects_proof_when_signer_key_does_not_match_claimed_pu
             &api,
             &claimed_public_key,
             &wrong_private_key,
-            None,
             ClientType::User,
         )
         .await;
@@ -510,7 +504,7 @@ async fn lookup_client_returns_public_key() {
         let (parent_key, parent_private) = generate_noise_keypair();
         let parent = register_client_created(
             &api,
-            client_request(&api, &parent_key, &parent_private, None, ClientType::User).await,
+            client_request(&api, &parent_key, &parent_private, ClientType::User).await,
         )
         .await;
 
@@ -815,33 +809,12 @@ async fn relay_jwt_public_key_endpoint_exposes_eddsa_key() {
 }
 
 #[tokio::test]
-async fn issue_relay_token_returns_signed_claims_for_device_and_client() {
+async fn issue_relay_token_returns_signed_claims_for_single_identity() {
     with_control_plane_api(|_state, api| async move {
-        let (parent_public, parent_private) = generate_noise_keypair();
-        let parent = register_client_created(
-            &api,
-            client_request(
-                &api,
-                &parent_public,
-                &parent_private,
-                None,
-                ClientType::User,
-            )
-            .await,
-        )
-        .await;
-
         let (device_public, device_private) = generate_noise_keypair();
         let device = register_client_created(
             &api,
-            client_request(
-                &api,
-                &device_public,
-                &device_private,
-                Some(&parent.id),
-                ClientType::Device,
-            )
-            .await,
+            client_request(&api, &device_public, &device_private, ClientType::Device).await,
         )
         .await;
 
@@ -851,8 +824,8 @@ async fn issue_relay_token_returns_signed_claims_for_device_and_client() {
             .unwrap();
         assert_eq!(token_res.status(), StatusCode::OK);
         let token_body = token_res.json::<IssueRelayTokenResponse>().await.unwrap();
-        assert_eq!(token_body.client_guid, parent.id);
-        assert_eq!(token_body.device_guid, device.id);
+        assert_eq!(token_body.guid, device.id);
+        assert_eq!(token_body.client_type, ClientType::Device);
 
         let key_res = api.get_relay_jwt_public_key().await.unwrap();
         assert_eq!(key_res.status(), StatusCode::OK);
@@ -865,8 +838,7 @@ async fn issue_relay_token_returns_signed_claims_for_device_and_client() {
         )
         .expect("decode relay token");
         assert_eq!(token.claims.sub, device.id);
-        assert_eq!(token.claims.device_guid, device.id);
-        assert_eq!(token.claims.client_guid, parent.id);
+        assert_eq!(token.claims.client_type, ClientType::Device);
         assert!(token.claims.exp > token.claims.iat);
     })
     .await;

@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
@@ -10,21 +10,28 @@ use crate::noise::{canonicalize_base64_32, decode_base64_32, encode_base64};
 pub struct ClientConfig {
     pub config_path: PathBuf,
     pub control_plane_uri: String,
-    pub noise_static_private_key: String,
+    pub device_noise_static_private_key: String,
+    pub user_noise_static_private_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 struct ClientConfigToml {
     control_plane_uri: String,
-    noise_static_private_key: String,
+    device_noise_static_private_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_noise_static_private_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    noise_static_private_key: Option<String>,
 }
 
 impl Default for ClientConfigToml {
     fn default() -> Self {
         Self {
             control_plane_uri: default_control_plane_uri(),
-            noise_static_private_key: generate_noise_static_private_key(),
+            device_noise_static_private_key: generate_noise_static_private_key(),
+            user_noise_static_private_key: None,
+            noise_static_private_key: None,
         }
     }
 }
@@ -51,19 +58,35 @@ fn generate_noise_static_private_key() -> String {
 
 impl ClientConfigToml {
     fn normalize(mut self) -> Result<Self> {
+        if self.noise_static_private_key.is_some() {
+            bail!(
+                "legacy config field `noise_static_private_key` is unsupported; manually migrate to `device_noise_static_private_key`"
+            );
+        }
+
         self.control_plane_uri = if self.control_plane_uri.trim().is_empty() {
             default_control_plane_uri()
         } else {
             self.control_plane_uri.trim().to_string()
         };
 
-        self.noise_static_private_key = if self.noise_static_private_key.trim().is_empty() {
-            generate_noise_static_private_key()
-        } else {
-            canonicalize_base64_32(
-                self.noise_static_private_key.trim(),
-                "noise_static_private_key",
-            )?
+        self.device_noise_static_private_key =
+            if self.device_noise_static_private_key.trim().is_empty() {
+                generate_noise_static_private_key()
+            } else {
+                canonicalize_base64_32(
+                    self.device_noise_static_private_key.trim(),
+                    "device_noise_static_private_key",
+                )?
+            };
+
+        self.user_noise_static_private_key = match self.user_noise_static_private_key.take() {
+            Some(value) if value.trim().is_empty() => None,
+            Some(value) => Some(canonicalize_base64_32(
+                value.trim(),
+                "user_noise_static_private_key",
+            )?),
+            None => None,
         };
 
         Ok(self)
@@ -116,11 +139,22 @@ impl ClientConfig {
         Ok(Self {
             config_path,
             control_plane_uri: file_config.control_plane_uri,
-            noise_static_private_key: file_config.noise_static_private_key,
+            device_noise_static_private_key: file_config.device_noise_static_private_key,
+            user_noise_static_private_key: file_config.user_noise_static_private_key,
         })
     }
 
-    pub(crate) fn noise_static_private_key_bytes(&self) -> Result<[u8; 32]> {
-        decode_base64_32(&self.noise_static_private_key, "noise_static_private_key")
+    pub(crate) fn device_noise_static_private_key_bytes(&self) -> Result<[u8; 32]> {
+        decode_base64_32(
+            &self.device_noise_static_private_key,
+            "device_noise_static_private_key",
+        )
+    }
+
+    pub(crate) fn user_noise_static_private_key_bytes(&self) -> Result<Option<[u8; 32]>> {
+        self.user_noise_static_private_key
+            .as_deref()
+            .map(|value| decode_base64_32(value, "user_noise_static_private_key"))
+            .transpose()
     }
 }

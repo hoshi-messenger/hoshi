@@ -1,5 +1,5 @@
-use hoshi_protocol::relay::RelayPacket;
-use std::{collections::HashSet, sync::atomic::Ordering};
+use hoshi_protocol::{control_plane::ClientType, relay::RelayPacket};
+use std::sync::atomic::Ordering;
 
 use tokio::sync::mpsc;
 
@@ -7,8 +7,8 @@ use super::ServerState;
 
 #[derive(Debug, Clone)]
 pub struct ConnectionIdentity {
-    pub client_guid: String,
-    pub device_guid: String,
+    pub guid: String,
+    pub client_type: ClientType,
 }
 
 #[derive(Debug, Clone)]
@@ -20,7 +20,6 @@ pub enum OutboundCommand {
 #[derive(Debug, Clone)]
 pub(super) struct SessionHandle {
     pub(super) session_id: u64,
-    pub(super) client_guid: String,
     pub(super) tx: mpsc::UnboundedSender<OutboundCommand>,
 }
 
@@ -41,101 +40,59 @@ impl ServerState {
     ) -> u64 {
         let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed) + 1;
 
-        let new_handle = SessionHandle {
-            session_id,
-            client_guid: identity.client_guid.clone(),
-            tx: tx.clone(),
-        };
+        let new_handle = SessionHandle { session_id, tx };
 
-        if let Some(old_handle) = self
-            .device_sessions
-            .insert(identity.device_guid.clone(), new_handle)
-        {
-            let _ = old_handle.tx.send(OutboundCommand::Close);
-            self.remove_device_from_client_index(&identity.device_guid, &old_handle.client_guid);
-        }
-
-        let client_set = self
-            .client_devices
-            .entry(identity.client_guid.clone())
-            .or_default();
-        client_set.insert(identity.device_guid.clone());
+        self.guid_sessions
+            .entry(identity.guid.clone())
+            .or_default()
+            .insert(session_id, new_handle);
 
         session_id
     }
 
     pub fn unregister_session_if_current(&self, identity: &ConnectionIdentity, session_id: u64) {
-        let should_remove = self
-            .device_sessions
-            .get(&identity.device_guid)
-            .map(|entry| entry.session_id == session_id)
-            .unwrap_or(false);
-
-        if !should_remove {
-            return;
-        }
-
-        self.device_sessions.remove(&identity.device_guid);
-        self.remove_device_from_client_index(&identity.device_guid, &identity.client_guid);
-    }
-
-    fn remove_device_from_client_index(&self, device_guid: &str, client_guid: &str) {
-        let should_drop_client = if let Some(client_set) = self.client_devices.get(client_guid) {
-            client_set.remove(device_guid);
-            client_set.is_empty()
-        } else {
-            false
-        };
-
-        if should_drop_client {
-            self.client_devices.remove(client_guid);
+        if let Some(sessions_for_guid) = self.guid_sessions.get(&identity.guid) {
+            sessions_for_guid.remove(&session_id);
+            let should_drop_guid = sessions_for_guid.is_empty();
+            drop(sessions_for_guid);
+            if should_drop_guid {
+                self.guid_sessions.remove(&identity.guid);
+            }
         }
     }
 
     pub fn route_packet(&self, packet: RelayPacket) -> std::result::Result<(), RouteError> {
         let recipient = packet.recipient.trim();
-
-        let mut targets: HashSet<String> = HashSet::new();
-        if self.device_sessions.contains_key(recipient) {
-            targets.insert(recipient.to_string());
-        }
-        if let Some(client_devices) = self.client_devices.get(recipient) {
-            for device_guid in client_devices.iter() {
-                targets.insert(device_guid.to_string());
-            }
-        }
-
+        let Some(sessions_for_guid) = self.guid_sessions.get(recipient) else {
+            return Err(RouteError);
+        };
+        let targets: Vec<SessionHandle> = sessions_for_guid
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
+        drop(sessions_for_guid);
         if targets.is_empty() {
             return Err(RouteError);
         }
-
         let mut sent = 0_usize;
-        let mut stale = Vec::new();
-
-        for device_guid in targets {
-            let Some(handle) = self
-                .device_sessions
-                .get(&device_guid)
-                .map(|entry| entry.clone())
-            else {
-                continue;
-            };
-
+        let mut stale_session_ids = Vec::new();
+        for handle in targets {
             match handle.tx.send(OutboundCommand::Packet(packet.clone())) {
                 Ok(()) => sent += 1,
-                Err(_) => stale.push((device_guid, handle.session_id, handle.client_guid)),
+                Err(_) => stale_session_ids.push(handle.session_id),
             }
         }
 
-        for (device_guid, session_id, client_guid) in stale {
-            let should_remove = self
-                .device_sessions
-                .get(&device_guid)
-                .map(|entry| entry.session_id == session_id)
-                .unwrap_or(false);
-            if should_remove {
-                self.device_sessions.remove(&device_guid);
-                self.remove_device_from_client_index(&device_guid, &client_guid);
+        if !stale_session_ids.is_empty() {
+            if let Some(sessions_for_guid) = self.guid_sessions.get(recipient) {
+                for session_id in stale_session_ids {
+                    sessions_for_guid.remove(&session_id);
+                }
+                let should_drop_guid = sessions_for_guid.is_empty();
+                drop(sessions_for_guid);
+                if should_drop_guid {
+                    self.guid_sessions.remove(recipient);
+                }
             }
         }
 

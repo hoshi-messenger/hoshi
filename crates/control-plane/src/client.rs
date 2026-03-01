@@ -17,7 +17,6 @@ pub enum ClientType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Client {
     pub id: String,
-    pub owner_id: Option<String>,
     pub client_type: ClientType,
     pub public_key: String,
     pub created_at: i64,
@@ -25,14 +24,9 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn create_client(
-        owner_id: Option<&str>,
-        client_type: ClientType,
-        public_key: &str,
-    ) -> Self {
+    pub fn create_client(client_type: ClientType, public_key: &str) -> Self {
         Self {
             id: uuid::Uuid::now_v7().to_string(),
-            owner_id: owner_id.map(str::to_string),
             client_type,
             public_key: public_key.to_string(),
             created_at: now(),

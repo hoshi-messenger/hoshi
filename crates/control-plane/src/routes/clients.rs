@@ -16,7 +16,6 @@ use super::common::{error_response, serialize_payload, verify_noise_proof};
 #[derive(Serialize)]
 struct ClientRegistrationProofPayload<'a> {
     public_key: &'a str,
-    owner_id: Option<&'a str>,
     client_type: &'a ClientType,
 }
 
@@ -35,7 +34,6 @@ pub(crate) async fn register_client_post(
         |canonical_public_key| {
             serialize_payload(&ClientRegistrationProofPayload {
                 public_key: canonical_public_key,
-                owner_id: payload.owner_id.as_deref(),
                 client_type: &payload.client_type,
             })
         },
@@ -49,17 +47,16 @@ pub(crate) async fn register_client_post(
         .get_client_by_public_key(&verified.canonical_public_key)
         .await
     {
-        Ok(Some(_)) => return error_response(StatusCode::CONFLICT, "client already exists"),
+        Ok(Some(existing)) => {
+            let response_client: ClientEntry = (&existing).into();
+            return (StatusCode::OK, Json(response_client)).into_response();
+        }
         Ok(None) => {}
         Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
     }
 
     let client_type: DomainClientType = payload.client_type.clone().into();
-    let client = Client::create_client(
-        payload.owner_id.as_deref(),
-        client_type,
-        &verified.canonical_public_key,
-    );
+    let client = Client::create_client(client_type, &verified.canonical_public_key);
 
     if let Err(err) = state.db.insert_client(&client).await {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());

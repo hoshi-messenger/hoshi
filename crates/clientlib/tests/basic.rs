@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use common::with_control_plane_and_relay;
-use hoshi_clientlib::{ClientConfig, ClientConnection};
+use hoshi_clientlib::{ClientConfig, ClientConnection, ClientSession, UserAuthState};
 use hoshi_protocol::control_plane::{
     ClientEntry as Client, ClientType, NoisePublicKeyResponse, RegisterClientRequest, RelayEntry,
 };
@@ -16,7 +16,6 @@ const REGISTRATION_NOISE_PATTERN: &str = "Noise_X_25519_ChaChaPoly_BLAKE2s";
 #[derive(Debug, Serialize)]
 struct ClientRegistrationProofPayload<'a> {
     public_key: &'a str,
-    owner_id: Option<&'a str>,
     client_type: &'a ClientType,
 }
 
@@ -40,53 +39,90 @@ async fn config_load_creates_default_file_when_missing() {
     assert!(!uri.is_empty());
 
     let key = table
-        .get("noise_static_private_key")
+        .get("device_noise_static_private_key")
         .and_then(toml::Value::as_str)
-        .expect("noise_static_private_key");
+        .expect("device_noise_static_private_key");
     let decoded = STANDARD.decode(key).expect("base64 decode");
     assert_eq!(decoded.len(), 32);
+
+    assert!(table.get("user_noise_static_private_key").is_none());
+    assert!(table.get("noise_static_private_key").is_none());
 }
 
 #[tokio::test]
-async fn config_load_normalizes_uri_and_key() {
+async fn config_load_normalizes_uri_and_keys() {
     let dir = TempDir::new().expect("temp dir");
     let config_path = dir.path().join("client.toml");
-    let key = STANDARD.encode([3_u8; 32]);
+    let device_key = STANDARD.encode([3_u8; 32]);
+    let user_key = STANDARD.encode([7_u8; 32]);
     let raw = format!(
         r#"
 control_plane_uri = "  http://127.0.0.1:2600  "
-noise_static_private_key = "  {key}  "
+device_noise_static_private_key = "  {device_key}  "
+user_noise_static_private_key = "  {user_key}  "
 "#
     );
     std::fs::write(&config_path, raw).expect("write config");
 
     let config = ClientConfig::load_from_path(&config_path).expect("load config");
     assert_eq!(config.control_plane_uri, "http://127.0.0.1:2600");
-    assert_eq!(config.noise_static_private_key, key);
+    assert_eq!(config.device_noise_static_private_key, device_key);
+    assert_eq!(
+        config.user_noise_static_private_key.as_deref(),
+        Some(user_key.as_str())
+    );
 }
 
 #[tokio::test]
-async fn connect_fails_for_unknown_client_key() {
+async fn config_load_rejects_legacy_noise_static_private_key_field() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_path = dir.path().join("client.toml");
+    let legacy_key = STANDARD.encode([9_u8; 32]);
+    let raw = format!(
+        r#"
+control_plane_uri = "http://127.0.0.1:2600"
+noise_static_private_key = "{legacy_key}"
+"#
+    );
+    std::fs::write(&config_path, raw).expect("write legacy config");
+
+    let err = ClientConfig::load_from_path(&config_path).expect_err("legacy config should fail");
+    assert!(
+        err.to_string().contains("noise_static_private_key"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn connect_auto_registers_device_when_unknown() {
     with_control_plane_and_relay(|control_plane, _relay| async move {
         let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
         let (_public_key, private_key) = generate_noise_keypair();
-        let (_config_dir, config_path) = write_client_config(&cp_uri, &private_key);
+        let _relay = wait_for_registered_relay(&http, &cp_uri).await;
+        let (_config_dir, config_path) = write_client_config(&cp_uri, &private_key, None);
         let config = ClientConfig::load_from_path(&config_path).expect("load config");
 
-        let err = match ClientConnection::connect_with_config(config).await {
-            Ok(_) => panic!("connect should fail for unknown client"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string().contains("unknown client"),
-            "unexpected error: {err:#}"
-        );
+        let mut connection = ClientConnection::connect_with_config(config)
+            .await
+            .expect("connect should auto-register device");
+        assert_eq!(connection.client_type(), ClientType::Device);
+        assert!(!connection.relay_guid().is_empty());
+
+        let lookup = http
+            .get(format!("{}/clients/{}", cp_uri, connection.guid()))
+            .send()
+            .await
+            .expect("lookup device guid");
+        assert_eq!(lookup.status(), reqwest::StatusCode::OK);
+
+        connection.close().await.expect("close connection");
     })
     .await;
 }
 
 #[tokio::test]
-async fn connect_to_stack_succeeds_for_registered_client() {
+async fn connect_to_stack_succeeds_for_registered_device() {
     with_control_plane_and_relay(|control_plane, _relay| async move {
         let cp_uri = control_plane.config.uri();
         let http = reqwest::Client::new();
@@ -97,7 +133,6 @@ async fn connect_to_stack_succeeds_for_registered_client() {
             &cp_uri,
             &sender_public_key,
             &sender_private_key,
-            None,
             ClientType::Device,
         )
         .await;
@@ -105,15 +140,15 @@ async fn connect_to_stack_succeeds_for_registered_client() {
         let _relay = wait_for_registered_relay(&http, &cp_uri).await;
 
         let (_sender_config_dir, sender_config_path) =
-            write_client_config(&cp_uri, &sender_private_key);
+            write_client_config(&cp_uri, &sender_private_key, None);
         let sender_config =
             ClientConfig::load_from_path(&sender_config_path).expect("load sender config");
         let mut sender_connection = ClientConnection::connect_with_config(sender_config)
             .await
             .expect("connect sender");
 
-        assert_eq!(sender_connection.device_guid(), sender.id);
-        assert_eq!(sender_connection.client_guid(), sender.id);
+        assert_eq!(sender_connection.guid(), sender.id);
+        assert_eq!(sender_connection.client_type(), ClientType::Device);
         assert!(!sender_connection.relay_guid().is_empty());
 
         sender_connection.close().await.expect("close sender");
@@ -133,20 +168,19 @@ async fn send_message_to_self_roundtrips_via_relay() {
             &cp_uri,
             &public_key,
             &private_key,
-            None,
             ClientType::Device,
         )
         .await;
 
         let _relay = wait_for_registered_relay(&http, &cp_uri).await;
 
-        let (_config_dir, config_path) = write_client_config(&cp_uri, &private_key);
+        let (_config_dir, config_path) = write_client_config(&cp_uri, &private_key, None);
         let config = ClientConfig::load_from_path(&config_path).expect("load config");
         let mut connection = ClientConnection::connect_with_config(config)
             .await
             .expect("connect client");
 
-        let self_guid = connection.device_guid().to_string();
+        let self_guid = connection.guid().to_string();
         assert_eq!(self_guid, registered.id);
 
         connection
@@ -167,25 +201,135 @@ async fn send_message_to_self_roundtrips_via_relay() {
 }
 
 #[tokio::test]
-async fn connect_does_not_persist_jwt_in_config() {
+async fn client_session_reports_no_local_user_identity_when_missing() {
     with_control_plane_and_relay(|control_plane, _relay| async move {
         let cp_uri = control_plane.config.uri();
         let http = reqwest::Client::new();
-
-        let (sender_public_key, sender_private_key) = generate_noise_keypair();
-        let _sender = register_client(
+        let (device_public_key, device_private_key) = generate_noise_keypair();
+        let _device = register_client(
             &http,
             &cp_uri,
-            &sender_public_key,
-            &sender_private_key,
-            None,
+            &device_public_key,
+            &device_private_key,
             ClientType::Device,
         )
         .await;
 
+        let (_config_dir, config_path) = write_client_config(&cp_uri, &device_private_key, None);
+        let config = ClientConfig::load_from_path(&config_path).expect("load config");
+        let mut session = ClientSession::connect_with_config(config)
+            .await
+            .expect("connect session");
+
+        assert_eq!(session.user_auth_state(), UserAuthState::NoLocalIdentity);
+        assert!(session.user_connection().is_none());
+        assert_eq!(
+            session.device_connection().client_type(),
+            ClientType::Device
+        );
+
+        session.close().await.expect("close session");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn client_session_reports_unknown_user_identity_without_failing() {
+    with_control_plane_and_relay(|control_plane, _relay| async move {
+        let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
+        let (device_public_key, device_private_key) = generate_noise_keypair();
+        let _device = register_client(
+            &http,
+            &cp_uri,
+            &device_public_key,
+            &device_private_key,
+            ClientType::Device,
+        )
+        .await;
+
+        let (_unknown_user_public_key, unknown_user_private_key) = generate_noise_keypair();
+        let (_config_dir, config_path) = write_client_config(
+            &cp_uri,
+            &device_private_key,
+            Some(&unknown_user_private_key),
+        );
+        let config = ClientConfig::load_from_path(&config_path).expect("load config");
+        let mut session = ClientSession::connect_with_config(config)
+            .await
+            .expect("connect session");
+
+        assert_eq!(session.user_auth_state(), UserAuthState::UnknownIdentity);
+        assert!(session.user_connection().is_none());
+        assert_eq!(
+            session.device_connection().client_type(),
+            ClientType::Device
+        );
+
+        session.close().await.expect("close session");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn client_session_connects_device_and_user_on_same_relay() {
+    with_control_plane_and_relay(|control_plane, _relay| async move {
+        let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
+        let (device_public_key, device_private_key) = generate_noise_keypair();
+        let _device = register_client(
+            &http,
+            &cp_uri,
+            &device_public_key,
+            &device_private_key,
+            ClientType::Device,
+        )
+        .await;
+        let (user_public_key, user_private_key) = generate_noise_keypair();
+        let _user = register_client(
+            &http,
+            &cp_uri,
+            &user_public_key,
+            &user_private_key,
+            ClientType::User,
+        )
+        .await;
+
+        let (_config_dir, config_path) =
+            write_client_config(&cp_uri, &device_private_key, Some(&user_private_key));
+        let config = ClientConfig::load_from_path(&config_path).expect("load config");
+        let mut session = ClientSession::connect_with_config(config)
+            .await
+            .expect("connect session");
+
+        assert_eq!(session.user_auth_state(), UserAuthState::Connected);
+        let user_connection = session
+            .user_connection()
+            .expect("user connection should be present");
+        assert_eq!(user_connection.client_type(), ClientType::User);
+        assert_eq!(
+            user_connection.relay_guid(),
+            session.device_connection().relay_guid()
+        );
+        assert_eq!(
+            session.relay_guid(),
+            session.device_connection().relay_guid()
+        );
+
+        session.close().await.expect("close session");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn connect_does_not_persist_jwt_in_config() {
+    with_control_plane_and_relay(|control_plane, _relay| async move {
+        let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
+        let (_sender_public_key, sender_private_key) = generate_noise_keypair();
         let _relay = wait_for_registered_relay(&http, &cp_uri).await;
 
-        let (_config_dir, config_path) = write_client_config(&cp_uri, &sender_private_key);
+        let (_config_dir, config_path) = write_client_config(&cp_uri, &sender_private_key, None);
         let config = ClientConfig::load_from_path(&config_path).expect("load config");
         let mut connection = ClientConnection::connect_with_config(config)
             .await
@@ -197,7 +341,7 @@ async fn connect_does_not_persist_jwt_in_config() {
         let table = value.as_table().expect("table");
         assert_eq!(table.len(), 2);
         assert!(table.contains_key("control_plane_uri"));
-        assert!(table.contains_key("noise_static_private_key"));
+        assert!(table.contains_key("device_noise_static_private_key"));
         assert!(!table.contains_key("token"));
         assert!(!table.contains_key("jwt"));
     })
@@ -206,17 +350,24 @@ async fn connect_does_not_persist_jwt_in_config() {
 
 fn write_client_config(
     control_plane_uri: &str,
-    private_key: &[u8; 32],
+    device_private_key: &[u8; 32],
+    user_private_key: Option<&[u8; 32]>,
 ) -> (TempDir, std::path::PathBuf) {
     let dir = TempDir::new().expect("temp dir");
     let config_path = dir.path().join("client.toml");
-    let key = STANDARD.encode(private_key);
-    let content = format!(
+    let device_key = STANDARD.encode(device_private_key);
+    let mut content = format!(
         r#"
 control_plane_uri = "{control_plane_uri}"
-noise_static_private_key = "{key}"
+device_noise_static_private_key = "{device_key}"
 "#
     );
+
+    if let Some(user_private_key) = user_private_key {
+        let user_key = STANDARD.encode(user_private_key);
+        content.push_str(&format!("user_noise_static_private_key = \"{user_key}\"\n"));
+    }
+
     std::fs::write(&config_path, content).expect("write config");
     (dir, config_path)
 }
@@ -280,20 +431,17 @@ async fn register_client(
     control_plane_uri: &str,
     public_key: &str,
     private_key: &[u8; 32],
-    owner_id: Option<&str>,
     client_type: ClientType,
 ) -> Client {
     let noise = fetch_control_plane_noise_key(http, control_plane_uri).await;
     let proof_payload = serde_json::to_vec(&ClientRegistrationProofPayload {
         public_key,
-        owner_id,
         client_type: &client_type,
     })
     .expect("serialize client proof");
 
     let req = RegisterClientRequest {
         public_key: public_key.to_string(),
-        owner_id: owner_id.map(str::to_string),
         client_type,
         noise_handshake: create_noise_handshake(private_key, &noise.public_key, &proof_payload),
     };

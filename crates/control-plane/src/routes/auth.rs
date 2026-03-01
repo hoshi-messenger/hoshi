@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use hoshi_protocol::control_plane::{
-    IssueRelayTokenRequest, IssueRelayTokenResponse, RelayJwtPublicKeyResponse,
+    ClientType, IssueRelayTokenRequest, IssueRelayTokenResponse, RelayJwtPublicKeyResponse,
 };
 use jsonwebtoken::{Algorithm, Header, encode};
 use serde::{Deserialize, Serialize};
@@ -24,8 +24,7 @@ struct RelayTokenClaims {
     sub: String,
     exp: i64,
     iat: i64,
-    client_guid: String,
-    device_guid: String,
+    client_type: ClientType,
 }
 
 pub(crate) async fn relay_jwt_public_key_get(State(state): State<ServerState>) -> Response {
@@ -67,11 +66,8 @@ pub(crate) async fn issue_relay_token_post(
         Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
     };
 
-    let device_guid = client.id.clone();
-    let client_guid = client.owner_id.clone().unwrap_or_else(|| client.id.clone());
-
-    if uuid::Uuid::parse_str(&device_guid).is_err() || uuid::Uuid::parse_str(&client_guid).is_err()
-    {
+    let guid = client.id.clone();
+    if uuid::Uuid::parse_str(&guid).is_err() {
         return error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "stored client guid is invalid",
@@ -81,11 +77,10 @@ pub(crate) async fn issue_relay_token_post(
     let issued_at = now();
     let expires_at = issued_at + 86_400;
     let claims = RelayTokenClaims {
-        sub: device_guid.clone(),
+        sub: guid.clone(),
         exp: expires_at,
         iat: issued_at,
-        client_guid: client_guid.clone(),
-        device_guid: device_guid.clone(),
+        client_type: client.client_type.clone().into(),
     };
 
     let token = match encode(
@@ -102,8 +97,8 @@ pub(crate) async fn issue_relay_token_post(
         Json(IssueRelayTokenResponse {
             token,
             expires_at,
-            client_guid,
-            device_guid,
+            guid,
+            client_type: client.client_type.into(),
         }),
     )
         .into_response()

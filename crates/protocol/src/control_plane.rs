@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ClientType {
     User,
@@ -18,7 +18,6 @@ pub struct ClientEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterClientRequest {
     pub public_key: String,
-    pub owner_id: Option<String>,
     pub client_type: ClientType,
     pub noise_handshake: String,
 }
@@ -59,8 +58,8 @@ pub struct IssueRelayTokenRequest {
 pub struct IssueRelayTokenResponse {
     pub token: String,
     pub expires_at: i64,
-    pub client_guid: String,
-    pub device_guid: String,
+    pub guid: String,
+    pub client_type: ClientType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
