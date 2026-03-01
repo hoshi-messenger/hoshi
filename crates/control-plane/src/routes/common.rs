@@ -3,11 +3,11 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use hoshi_protocol::common::ErrorResponse;
 use serde::Serialize;
 
 use crate::{
     ServerState,
-    api::ErrorResponse,
     noise::{
         canonicalize_base64_32, decode_base64, serialize_proof_payload, verify_registration_proof,
     },
@@ -54,11 +54,11 @@ pub(crate) fn verify_noise_proof<F>(
 where
     F: FnOnce(&str) -> Result<Vec<u8>, RouteError>,
 {
-    let (canonical_public_key, public_key) =
-        canonicalize_base64_32(public_key_b64, "public_key").map_err(|err| RouteError {
-            status: StatusCode::BAD_REQUEST,
-            message: err.to_string(),
-        })?;
+    let (canonical_public_key, public_key) = canonicalize_base64_32(public_key_b64, "public_key")
+        .map_err(|err| RouteError {
+        status: StatusCode::BAD_REQUEST,
+        message: err.to_string(),
+    })?;
 
     let noise_handshake = decode_base64(noise_handshake_b64).map_err(|_| RouteError {
         status: StatusCode::BAD_REQUEST,

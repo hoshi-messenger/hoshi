@@ -4,12 +4,12 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use hoshi_protocol::control_plane::{
+    ClientEntry, ClientType, LookupClientResponse, RegisterClientRequest,
+};
 use serde::Serialize;
 
-use crate::{
-    Client, ClientType, ServerState,
-    api::{LookupClientResponse, RegisterClientRequest},
-};
+use crate::{Client, ClientType as DomainClientType, ServerState};
 
 use super::common::{error_response, serialize_payload, verify_noise_proof};
 
@@ -54,9 +54,10 @@ pub(crate) async fn register_client_post(
         Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
     }
 
+    let client_type: DomainClientType = payload.client_type.clone().into();
     let client = Client::create_client(
         payload.owner_id.as_deref(),
-        payload.client_type,
+        client_type,
         &verified.canonical_public_key,
     );
 
@@ -64,14 +65,15 @@ pub(crate) async fn register_client_post(
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
     }
 
-    (StatusCode::CREATED, Json(client)).into_response()
+    let response_client: ClientEntry = (&client).into();
+    (StatusCode::CREATED, Json(response_client)).into_response()
 }
 
 pub(crate) async fn lookup_client_get(
     Path(guid): Path<String>,
     State(state): State<ServerState>,
 ) -> Response {
-    let (client, children) = match state.db.get_client_with_children(&guid).await {
+    let client = match state.db.get_client(&guid).await {
         Ok(Some(result)) => result,
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "client not found"),
         Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
@@ -79,7 +81,9 @@ pub(crate) async fn lookup_client_get(
 
     (
         StatusCode::OK,
-        Json(LookupClientResponse { client, children }),
+        Json(LookupClientResponse {
+            public_key: client.public_key,
+        }),
     )
         .into_response()
 }

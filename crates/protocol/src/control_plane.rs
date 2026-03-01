@@ -1,10 +1,18 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Client, ClientType};
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClientType {
+    User,
+    Device,
+    Relay,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorResponse {
-    pub error: String,
+pub struct ClientEntry {
+    pub id: String,
+    pub client_type: ClientType,
+    pub public_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,8 +25,7 @@ pub struct RegisterClientRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LookupClientResponse {
-    pub client: Client,
-    pub children: Vec<Client>,
+    pub public_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,12 +1,12 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use hoshi_protocol::control_plane::RelayJwtPublicKeyResponse;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::Deserialize;
 use uuid::Uuid;
 
 use super::{ConnectionIdentity, ServerState};
-use crate::api::RelayJwtPublicKeyResponse;
 
 const JWT_KEY_REFRESH_SUCCESS_INTERVAL: Duration = Duration::from_secs(300);
 const JWT_KEY_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(10);

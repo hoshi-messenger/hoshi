@@ -1,7 +1,6 @@
-pub use hoshi_control_plane::Client as ClientEntry;
-pub use hoshi_control_plane::ClientType;
-pub use hoshi_control_plane::api::{
-    ErrorResponse, IssueRelayTokenRequest, IssueRelayTokenResponse, LookupClientResponse,
+pub use hoshi_protocol::common::ErrorResponse;
+pub use hoshi_protocol::control_plane::{
+    ClientEntry, ClientType, IssueRelayTokenRequest, IssueRelayTokenResponse, LookupClientResponse,
     NoisePublicKeyResponse, RegisterClientRequest, RegisterRelayRequest, RelayEntry,
     RelayJwtPublicKeyResponse,
 };

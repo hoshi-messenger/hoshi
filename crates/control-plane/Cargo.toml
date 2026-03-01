@@ -19,6 +19,7 @@ snow = { workspace = true }
 jsonwebtoken = { workspace = true }
 ed25519-dalek = { workspace = true }
 dirs = { workspace = true }
+hoshi-protocol = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 sd-notify = { workspace = true }

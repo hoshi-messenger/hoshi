@@ -5,9 +5,8 @@ use std::time::Duration;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use common::with_control_plane_and_relay;
 use hoshi_clientlib::{ClientConfig, ClientConnection};
-use hoshi_control_plane::{
-    Client, ClientType,
-    api::{NoisePublicKeyResponse, RegisterClientRequest, RelayEntry},
+use hoshi_protocol::control_plane::{
+    ClientEntry as Client, ClientType, NoisePublicKeyResponse, RegisterClientRequest, RelayEntry,
 };
 use serde::Serialize;
 use tempfile::TempDir;

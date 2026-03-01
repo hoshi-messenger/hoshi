@@ -1,9 +1,9 @@
+use hoshi_protocol::relay::RelayPacket;
 use std::{collections::HashSet, sync::atomic::Ordering};
 
 use tokio::sync::mpsc;
 
 use super::ServerState;
-use crate::api::RelayPacket;
 
 #[derive(Debug, Clone)]
 pub struct ConnectionIdentity {

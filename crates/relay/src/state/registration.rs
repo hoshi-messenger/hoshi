@@ -1,13 +1,11 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use hoshi_protocol::control_plane::{NoisePublicKeyResponse, RegisterRelayRequest};
 use serde::Serialize;
 
 use super::ServerState;
-use crate::{
-    api::{NoisePublicKeyResponse, RegisterRelayRequest},
-    noise::{create_initiator_handshake, encode_base64, serialize_payload},
-};
+use crate::noise::{create_initiator_handshake, encode_base64, serialize_payload};
 
 const RELAY_REGISTRATION_SUCCESS_INTERVAL: Duration = Duration::from_secs(60);
 const RELAY_REGISTRATION_RETRY_INTERVAL: Duration = Duration::from_secs(10);

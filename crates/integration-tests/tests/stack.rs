@@ -1,8 +1,7 @@
 mod common;
 
 use common::{with_control_plane, with_control_plane_and_relay, with_relay};
-use hoshi_control_plane::api::NoisePublicKeyResponse;
-use hoshi_relay::api::HealthzResponse;
+use hoshi_protocol::{control_plane::NoisePublicKeyResponse, relay::HealthzResponse};
 use reqwest::StatusCode;
 
 const NOISE_PATTERN: &str = "Noise_X_25519_ChaChaPoly_BLAKE2s";

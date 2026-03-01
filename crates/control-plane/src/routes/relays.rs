@@ -6,12 +6,10 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use hoshi_protocol::control_plane::{RegisterRelayRequest, RelayEntry};
 use serde::Serialize;
 
-use crate::{
-    ServerState,
-    api::{RegisterRelayRequest, RelayEntry},
-};
+use crate::ServerState;
 
 use super::common::{error_response, serialize_payload, verify_noise_proof};
 

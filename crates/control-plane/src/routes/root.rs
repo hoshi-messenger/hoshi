@@ -3,11 +3,9 @@ use axum::{
     extract::State,
     response::{Html, IntoResponse, Response},
 };
+use hoshi_protocol::control_plane::NoisePublicKeyResponse;
 
-use crate::{
-    ServerState, api::NoisePublicKeyResponse, noise::REGISTRATION_NOISE_PATTERN,
-    utils::response_html,
-};
+use crate::{ServerState, noise::REGISTRATION_NOISE_PATTERN, utils::response_html};
 
 pub(crate) async fn index_get(State(_state): State<ServerState>) -> Html<String> {
     let html = "<h1>Welcome to the Hoshi control plane!</h1>";

@@ -6,11 +6,9 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
+use hoshi_protocol::{common::ErrorResponse, relay::HealthzResponse};
 
-use crate::{
-    ServerState,
-    api::{ErrorResponse, HealthzResponse},
-};
+use crate::ServerState;
 
 pub async fn index_get(State(_state): State<ServerState>) -> Html<String> {
     Html("<h1>Welcome to the Hoshi relay!</h1>".to_string())

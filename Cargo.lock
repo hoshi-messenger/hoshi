@@ -617,6 +617,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "hoshi-control-plane",
+ "hoshi-protocol",
  "hoshi-relay",
  "rand_core 0.6.4",
  "reqwest",
@@ -640,6 +641,7 @@ dependencies = [
  "dashmap",
  "dirs",
  "ed25519-dalek",
+ "hoshi-protocol",
  "jsonwebtoken",
  "rand_core 0.6.4",
  "reqwest",
@@ -659,10 +661,18 @@ name = "hoshi-integration-tests"
 version = "0.1.0"
 dependencies = [
  "hoshi-control-plane",
+ "hoshi-protocol",
  "hoshi-relay",
  "reqwest",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "hoshi-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -675,6 +685,7 @@ dependencies = [
  "dashmap",
  "dirs",
  "ed25519-dalek",
+ "hoshi-protocol",
  "jsonwebtoken",
  "rand_core 0.6.4",
  "reqwest",

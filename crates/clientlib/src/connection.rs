@@ -2,6 +2,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
+use hoshi_protocol::{
+    common::ErrorResponse,
+    control_plane::{
+        IssueRelayTokenRequest, IssueRelayTokenResponse, LookupClientResponse,
+        NoisePublicKeyResponse, RelayEntry,
+    },
+    relay::{RelayErrorPacket, RelayPacket},
+};
 use rand_core::{OsRng, RngCore};
 use serde::Serialize;
 use tokio::net::TcpStream;
@@ -21,10 +29,6 @@ use crate::{
         decode_base64, decrypt_e2ee_payload, derive_public_key, encode_base64,
         encrypt_e2ee_payload, finish_relay_initiator_handshake,
     },
-    wire::{
-        E2eeEnvelope, ErrorResponse, IssueRelayTokenRequest, IssueRelayTokenResponse,
-        LookupClientResponse, NoisePublicKeyResponse, RelayEntry, RelayErrorPacket, RelayPacket,
-    },
 };
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
@@ -32,6 +36,13 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Debug, Serialize)]
 struct RelayTokenProofPayload<'a> {
     public_key: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+struct E2eeEnvelope {
+    version: u8,
+    alg: String,
+    ciphertext: String,
 }
 
 #[derive(Debug, Clone)]
@@ -117,7 +128,7 @@ impl ClientConnection {
             .json::<LookupClientResponse>()
             .await
             .context("failed to decode recipient lookup payload")?;
-        let e2ee_ciphertext = encrypt_e2ee_payload(&lookup.client.public_key, payload)?;
+        let e2ee_ciphertext = encrypt_e2ee_payload(&lookup.public_key, payload)?;
         let envelope = E2eeEnvelope {
             version: 1,
             alg: E2EE_NOISE_PATTERN.to_string(),

@@ -4,14 +4,13 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use hoshi_protocol::control_plane::{
+    IssueRelayTokenRequest, IssueRelayTokenResponse, RelayJwtPublicKeyResponse,
+};
 use jsonwebtoken::{Algorithm, Header, encode};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    ServerState,
-    api::{IssueRelayTokenRequest, IssueRelayTokenResponse, RelayJwtPublicKeyResponse},
-    now,
-};
+use crate::{ServerState, now};
 
 use super::common::{error_response, serialize_payload, verify_noise_proof};
 

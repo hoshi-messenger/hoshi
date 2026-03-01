@@ -388,11 +388,8 @@ async fn register_client_success_returns_201_and_entry() {
         let body = res.json::<ClientEntry>().await.unwrap();
 
         assert!(!body.id.is_empty());
-        assert_eq!(body.owner_id, None);
         assert!(matches!(body.client_type, ClientType::User));
         assert_eq!(body.public_key, public_key);
-        assert!(body.created_at > 0);
-        assert!(body.last_seen > 0);
     })
     .await;
 }
@@ -508,7 +505,7 @@ async fn register_client_rejects_proof_when_signer_key_does_not_match_claimed_pu
 }
 
 #[tokio::test]
-async fn lookup_client_returns_parent_and_direct_children_only() {
+async fn lookup_client_returns_public_key() {
     with_control_plane_api(|_state, api| async move {
         let (parent_key, parent_private) = generate_noise_keypair();
         let parent = register_client_created(
@@ -517,58 +514,10 @@ async fn lookup_client_returns_parent_and_direct_children_only() {
         )
         .await;
 
-        let (child_one_key, child_one_private) = generate_noise_keypair();
-        let child_one = register_client_created(
-            &api,
-            client_request(
-                &api,
-                &child_one_key,
-                &child_one_private,
-                Some(parent.id.as_str()),
-                ClientType::Device,
-            )
-            .await,
-        )
-        .await;
-
-        let (child_two_key, child_two_private) = generate_noise_keypair();
-        let child_two = register_client_created(
-            &api,
-            client_request(
-                &api,
-                &child_two_key,
-                &child_two_private,
-                Some(parent.id.as_str()),
-                ClientType::Device,
-            )
-            .await,
-        )
-        .await;
-
-        let (grandchild_key, grandchild_private) = generate_noise_keypair();
-        let grandchild = register_client_created(
-            &api,
-            client_request(
-                &api,
-                &grandchild_key,
-                &grandchild_private,
-                Some(child_one.id.as_str()),
-                ClientType::Device,
-            )
-            .await,
-        )
-        .await;
-
         let res = api.lookup_client(&parent.id).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let body = res.json::<LookupClientResponse>().await.unwrap();
-
-        assert_eq!(body.client.id, parent.id);
-        assert_eq!(body.children.len(), 2);
-        let child_ids: Vec<String> = body.children.iter().map(|c| c.id.clone()).collect();
-        assert!(child_ids.contains(&child_one.id));
-        assert!(child_ids.contains(&child_two.id));
-        assert!(!child_ids.contains(&grandchild.id));
+        assert_eq!(body.public_key, parent.public_key);
     })
     .await;
 }

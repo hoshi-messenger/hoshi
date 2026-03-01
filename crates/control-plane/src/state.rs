@@ -4,11 +4,12 @@ use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use dashmap::DashMap;
 use ed25519_dalek::{SigningKey, pkcs8::EncodePrivateKey};
+use hoshi_protocol::control_plane::RelayEntry;
 use jsonwebtoken::EncodingKey;
 use rand_core::{OsRng, RngCore};
 
 use crate::{
-    Config, RelayEntry,
+    Config,
     database::Database,
     noise::{
         canonicalize_base64_32, derive_public_key, encode_base64, generate_static_private_key,

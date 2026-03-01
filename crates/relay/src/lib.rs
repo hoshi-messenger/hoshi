@@ -1,4 +1,3 @@
-pub mod api;
 mod config;
 mod http;
 mod noise;

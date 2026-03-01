@@ -1,4 +1,3 @@
-pub mod api;
 mod client;
 mod config;
 mod database;
@@ -10,7 +9,6 @@ mod utils;
 
 use std::net::SocketAddr;
 
-pub use api::*;
 pub use client::{Client, ClientType};
 pub use config::Config;
 pub use database::Database;

@@ -1,6 +1,7 @@
 use std::{fmt, str::FromStr};
 
 use anyhow::{Result, anyhow};
+use hoshi_protocol::control_plane as protocol;
 use serde::{Deserialize, Serialize};
 
 use crate::now;
@@ -59,6 +60,36 @@ impl FromStr for ClientType {
             "device" => Ok(ClientType::Device),
             "relay" => Ok(ClientType::Relay),
             other => Err(anyhow!("Unknown client type: {}", other)),
+        }
+    }
+}
+
+impl From<protocol::ClientType> for ClientType {
+    fn from(value: protocol::ClientType) -> Self {
+        match value {
+            protocol::ClientType::User => ClientType::User,
+            protocol::ClientType::Device => ClientType::Device,
+            protocol::ClientType::Relay => ClientType::Relay,
+        }
+    }
+}
+
+impl From<ClientType> for protocol::ClientType {
+    fn from(value: ClientType) -> Self {
+        match value {
+            ClientType::User => protocol::ClientType::User,
+            ClientType::Device => protocol::ClientType::Device,
+            ClientType::Relay => protocol::ClientType::Relay,
+        }
+    }
+}
+
+impl From<&Client> for protocol::ClientEntry {
+    fn from(value: &Client) -> Self {
+        Self {
+            id: value.id.clone(),
+            client_type: value.client_type.clone().into(),
+            public_key: value.public_key.clone(),
         }
     }
 }

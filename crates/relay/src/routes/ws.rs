@@ -1,8 +1,8 @@
 use axum::extract::ws::{Message, WebSocket};
+use hoshi_protocol::relay::{RelayErrorPacket, RelayPacket};
 
 use crate::{
     ServerState,
-    api::{RelayErrorPacket, RelayPacket},
     noise::accept_responder_handshake,
     state::{ConnectionIdentity, OutboundCommand},
 };
