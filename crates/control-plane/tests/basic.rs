@@ -9,32 +9,20 @@ use common::{
     RegisterRelayRequest, RelayEntry, RelayJwtPublicKeyResponse, with_control_plane,
 };
 use hoshi_control_plane::{Config, ServerState};
+use hoshi_protocol::{
+    control_plane::{
+        ClientRegistrationProofPayload, RelayRegistrationProofPayload, RelayTokenProofPayload,
+    },
+    noise::{
+        REGISTRATION_NOISE_PATTERN, create_registration_handshake, derive_public_key,
+        encode_base64, generate_static_private_key,
+    },
+};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use reqwest::Client;
 use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tempfile::TempDir;
-
-const NOISE_PATTERN: &str = "Noise_X_25519_ChaChaPoly_BLAKE2s";
-
-#[derive(Serialize)]
-struct ClientRegistrationProofPayload<'a> {
-    public_key: &'a str,
-    client_type: &'a ClientType,
-}
-
-#[derive(Serialize)]
-struct RelayRegistrationProofPayload<'a> {
-    public_key: &'a str,
-    guid: &'a str,
-    api_key: &'a str,
-    port: u16,
-}
-
-#[derive(Serialize)]
-struct RelayTokenProofPayload<'a> {
-    public_key: &'a str,
-}
 
 #[derive(Debug, Deserialize)]
 struct RelayTokenClaims {
@@ -44,34 +32,21 @@ struct RelayTokenClaims {
     client_type: ClientType,
 }
 
-fn generate_noise_keypair() -> (String, Vec<u8>) {
-    let params = NOISE_PATTERN.parse().expect("parse noise pattern");
-    let keypair = snow::Builder::new(params)
-        .generate_keypair()
-        .expect("generate noise keypair");
-    (STANDARD.encode(&keypair.public), keypair.private)
+fn generate_noise_keypair() -> (String, [u8; 32]) {
+    let private_key = generate_static_private_key().expect("generate noise keypair");
+    let public_key = encode_base64(&derive_public_key(&private_key));
+    (public_key, private_key)
 }
 
 fn create_noise_handshake(
-    client_private_key: &[u8],
+    client_private_key: &[u8; 32],
     server_public_key_b64: &str,
     proof_payload: &[u8],
 ) -> String {
-    let server_public_key = STANDARD
-        .decode(server_public_key_b64)
-        .expect("decode server public key");
-    let params = NOISE_PATTERN.parse().expect("parse noise pattern");
-    let mut initiator = snow::Builder::new(params)
-        .local_private_key(client_private_key)
-        .remote_public_key(&server_public_key)
-        .build_initiator()
-        .expect("build noise initiator");
-
-    let mut message = vec![0_u8; proof_payload.len() + 256];
-    let message_len = initiator
-        .write_message(proof_payload, &mut message)
-        .expect("write noise handshake");
-    STANDARD.encode(&message[..message_len])
+    let handshake =
+        create_registration_handshake(client_private_key, server_public_key_b64, proof_payload)
+            .expect("write noise handshake");
+    STANDARD.encode(handshake)
 }
 
 async fn fetch_noise_public_key(api: &ControlPlaneApi) -> NoisePublicKeyResponse {
@@ -83,13 +58,13 @@ async fn fetch_noise_public_key(api: &ControlPlaneApi) -> NoisePublicKeyResponse
 async fn client_request(
     api: &ControlPlaneApi,
     public_key: &str,
-    private_key: &[u8],
+    private_key: &[u8; 32],
     client_type: ClientType,
 ) -> RegisterClientRequest {
     let server_noise = fetch_noise_public_key(api).await;
     let proof_payload = serde_json::to_vec(&ClientRegistrationProofPayload {
-        public_key,
-        client_type: &client_type,
+        public_key: public_key.to_string(),
+        client_type: client_type.clone(),
     })
     .expect("serialize client proof payload");
     let noise_handshake =
@@ -106,15 +81,15 @@ async fn relay_request(
     api: &ControlPlaneApi,
     guid: &str,
     public_key: &str,
-    private_key: &[u8],
+    private_key: &[u8; 32],
     api_key: &str,
     port: u16,
 ) -> RegisterRelayRequest {
     let server_noise = fetch_noise_public_key(api).await;
     let proof_payload = serde_json::to_vec(&RelayRegistrationProofPayload {
-        public_key,
-        guid,
-        api_key,
+        public_key: public_key.to_string(),
+        guid: guid.to_string(),
+        api_key: api_key.to_string(),
         port,
     })
     .expect("serialize relay proof payload");
@@ -133,11 +108,13 @@ async fn relay_request(
 async fn relay_token_request(
     api: &ControlPlaneApi,
     public_key: &str,
-    private_key: &[u8],
+    private_key: &[u8; 32],
 ) -> IssueRelayTokenRequest {
     let server_noise = fetch_noise_public_key(api).await;
-    let proof_payload =
-        serde_json::to_vec(&RelayTokenProofPayload { public_key }).expect("serialize token proof");
+    let proof_payload = serde_json::to_vec(&RelayTokenProofPayload {
+        public_key: public_key.to_string(),
+    })
+    .expect("serialize token proof");
     let noise_handshake =
         create_noise_handshake(private_key, &server_noise.public_key, &proof_payload);
 
@@ -339,7 +316,7 @@ async fn noise_public_key_endpoint_returns_pattern_and_valid_key() {
         assert_eq!(res.status(), StatusCode::OK);
 
         let body = res.json::<NoisePublicKeyResponse>().await.unwrap();
-        assert_eq!(body.pattern, NOISE_PATTERN);
+        assert_eq!(body.pattern, REGISTRATION_NOISE_PATTERN);
         let key = STANDARD.decode(body.public_key).unwrap();
         assert_eq!(key.len(), 32);
     })

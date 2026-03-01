@@ -22,6 +22,12 @@ pub struct RegisterClientRequest {
     pub noise_handshake: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientRegistrationProofPayload {
+    pub public_key: String,
+    pub client_type: ClientType,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LookupClientResponse {
     pub public_key: String,
@@ -34,6 +40,14 @@ pub struct RegisterRelayRequest {
     pub api_key: String,
     pub port: u16,
     pub noise_handshake: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayRegistrationProofPayload {
+    pub public_key: String,
+    pub guid: String,
+    pub api_key: String,
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +66,11 @@ pub struct RelayJwtPublicKeyResponse {
 pub struct IssueRelayTokenRequest {
     pub public_key: String,
     pub noise_handshake: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayTokenProofPayload {
+    pub public_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

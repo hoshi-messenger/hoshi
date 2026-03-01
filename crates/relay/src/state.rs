@@ -9,15 +9,13 @@ use std::{
 
 use anyhow::{Context, Result};
 use dashmap::DashMap;
+use hoshi_protocol::noise::{canonicalize_base64_32, derive_public_key, encode_base64};
 use jsonwebtoken::DecodingKey;
 use tokio::sync::RwLock;
 
 pub use sessions::{ConnectionIdentity, OutboundCommand};
 
-use crate::{
-    Config,
-    noise::{canonicalize_base64_32, derive_public_key, encode_base64},
-};
+use crate::Config;
 
 #[derive(Clone)]
 pub struct ServerState {

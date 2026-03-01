@@ -14,6 +14,13 @@ pub struct RelayPacket {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct E2eeEnvelope {
+    pub version: u8,
+    pub alg: String,
+    pub ciphertext: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RelayErrorPacket {
     pub error: String,
     pub recipient: Option<String>,

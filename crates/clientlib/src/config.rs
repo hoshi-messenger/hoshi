@@ -6,13 +6,12 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use hoshi_protocol::control_plane::ClientType;
+use hoshi_protocol::noise::canonicalize_base64_32;
 use tokio_rusqlite::{
     Connection,
     rusqlite::{self, Row},
 };
 use uuid::Uuid;
-
-use crate::noise::canonicalize_base64_32;
 
 const CONTROL_PLANE_URI_CONFIG_KEY: &str = "control_plane_uri";
 const DEVICE_GUID_CONFIG_KEY: &str = "device_guid";
@@ -184,7 +183,8 @@ impl ClientDatabase {
         if uri.is_empty() {
             bail!("control_plane_uri must not be empty");
         }
-        self.set_config_string(CONTROL_PLANE_URI_CONFIG_KEY, uri).await
+        self.set_config_string(CONTROL_PLANE_URI_CONFIG_KEY, uri)
+            .await
     }
 
     pub async fn get_device_guid(&self) -> Result<Option<String>> {
@@ -233,7 +233,7 @@ impl ClientDatabase {
         private_key_b64: &str,
     ) -> Result<()> {
         let guid = canonicalize_guid(guid)?;
-        let private_key = canonicalize_base64_32(private_key_b64.trim(), "private_key")?;
+        let private_key = canonicalize_base64_32(private_key_b64.trim(), "private_key")?.0;
         let client_type = client_type_to_db_value(&client_type).to_string();
         let timestamp = now();
 
@@ -319,7 +319,7 @@ impl ClientDatabase {
         Ok(StoredKey {
             guid: canonicalize_guid(&row.guid)?,
             client_type: client_type_from_db_value(&row.client_type)?,
-            private_key: canonicalize_base64_32(&row.private_key, "private_key")?,
+            private_key: canonicalize_base64_32(&row.private_key, "private_key")?.0,
             created_at: row.created_at,
             last_used: row.last_used,
         })
@@ -348,7 +348,9 @@ fn now() -> i64 {
 }
 
 fn canonicalize_guid(guid: &str) -> Result<String> {
-    Ok(Uuid::parse_str(guid.trim()).context("invalid guid")?.to_string())
+    Ok(Uuid::parse_str(guid.trim())
+        .context("invalid guid")?
+        .to_string())
 }
 
 fn client_type_to_db_value(client_type: &ClientType) -> &'static str {

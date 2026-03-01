@@ -6,13 +6,17 @@ use hoshi_protocol::{
     common::ErrorResponse,
     control_plane::{
         ClientType, IssueRelayTokenRequest, IssueRelayTokenResponse, LookupClientResponse,
-        NoisePublicKeyResponse, RelayEntry,
+        NoisePublicKeyResponse, RelayEntry, RelayTokenProofPayload,
     },
-    relay::{RelayErrorPacket, RelayPacket},
+    noise::{
+        E2EE_NOISE_PATTERN, create_registration_handshake, create_relay_initiator_handshake,
+        decode_base64, decode_base64_32, decrypt_e2ee_payload, derive_public_key, encode_base64,
+        encrypt_e2ee_payload, finish_relay_initiator_handshake,
+    },
+    relay::{E2eeEnvelope, RelayErrorPacket, RelayPacket},
 };
 use rand_core::{OsRng, RngCore};
 use reqwest::StatusCode;
-use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
@@ -24,28 +28,9 @@ use tokio_tungstenite::{
 };
 use uuid::Uuid;
 
-use crate::{
-    ClientDatabase,
-    noise::{
-        E2EE_NOISE_PATTERN, create_registration_handshake, create_relay_initiator_handshake,
-        decode_base64, decode_base64_32, decrypt_e2ee_payload, derive_public_key, encode_base64,
-        encrypt_e2ee_payload, finish_relay_initiator_handshake,
-    },
-};
+use crate::ClientDatabase;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
-
-#[derive(Debug, Serialize)]
-struct RelayTokenProofPayload<'a> {
-    public_key: &'a str,
-}
-
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
-struct E2eeEnvelope {
-    version: u8,
-    alg: String,
-    ciphertext: String,
-}
 
 #[derive(Debug, Clone)]
 pub struct ReceivedMessage {
@@ -92,7 +77,11 @@ impl ClientManager {
         self.connect_internal(guid, private_key_b64, None).await
     }
 
-    pub async fn connect_from_store(&mut self, guid: &str, client_type: ClientType) -> Result<usize> {
+    pub async fn connect_from_store(
+        &mut self,
+        guid: &str,
+        client_type: ClientType,
+    ) -> Result<usize> {
         let key = self
             .db
             .get_key(guid, client_type.clone())
@@ -388,7 +377,9 @@ fn build_http_client() -> Result<reqwest::Client> {
 }
 
 fn canonicalize_guid(guid: &str) -> Result<String> {
-    Ok(Uuid::parse_str(guid.trim()).context("invalid guid")?.to_string())
+    Ok(Uuid::parse_str(guid.trim())
+        .context("invalid guid")?
+        .to_string())
 }
 
 fn ensure_token_identity_type(
@@ -456,7 +447,7 @@ async fn issue_relay_token(
 ) -> std::result::Result<IssueRelayTokenResponse, RelayTokenIssueError> {
     let endpoint = format!("{control_plane_uri}/auth/relay-token");
     let proof_payload = serde_json::to_vec(&RelayTokenProofPayload {
-        public_key: noise_public_key,
+        public_key: noise_public_key.to_string(),
     })
     .map_err(|err| RelayTokenIssueError::Other(anyhow!(err)))?;
     let noise_handshake =

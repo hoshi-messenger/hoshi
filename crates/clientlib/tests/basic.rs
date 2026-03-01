@@ -5,21 +5,19 @@ use std::time::Duration;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use common::with_control_plane_and_relay;
 use hoshi_clientlib::{ClientDatabase, ClientManager};
-use hoshi_protocol::control_plane::{
-    ClientEntry as Client, ClientType, NoisePublicKeyResponse, RegisterClientRequest,
+use hoshi_protocol::{
+    control_plane::{
+        ClientEntry as Client, ClientRegistrationProofPayload, ClientType, NoisePublicKeyResponse,
+        RegisterClientRequest,
+    },
+    noise::{
+        create_registration_handshake, derive_public_key, encode_base64,
+        generate_static_private_key,
+    },
 };
 use reqwest::StatusCode;
-use serde::Serialize;
 use tempfile::TempDir;
 use uuid::Uuid;
-
-const REGISTRATION_NOISE_PATTERN: &str = "Noise_X_25519_ChaChaPoly_BLAKE2s";
-
-#[derive(Debug, Serialize)]
-struct ClientRegistrationProofPayload<'a> {
-    public_key: &'a str,
-    client_type: &'a ClientType,
-}
 
 #[tokio::test]
 async fn database_open_creates_file_and_default_control_plane_uri() {
@@ -86,7 +84,9 @@ async fn database_key_upsert_roundtrip() {
 
     assert_eq!(stored.guid, guid.to_lowercase());
     assert_eq!(stored.client_type, ClientType::Device);
-    let decoded = STANDARD.decode(&stored.private_key).expect("base64 decode key");
+    let decoded = STANDARD
+        .decode(&stored.private_key)
+        .expect("base64 decode key");
     assert_eq!(decoded.len(), 32);
 
     db.touch_key(&guid, ClientType::Device)
@@ -141,9 +141,13 @@ async fn connect_from_store_succeeds_for_registered_device() {
         db.set_control_plane_uri(&cp_uri)
             .await
             .expect("set control-plane uri");
-        db.upsert_key(&registered.id, ClientType::Device, &STANDARD.encode(private_key))
-            .await
-            .expect("store device key");
+        db.upsert_key(
+            &registered.id,
+            ClientType::Device,
+            &STANDARD.encode(private_key),
+        )
+        .await
+        .expect("store device key");
 
         let mut manager = ClientManager::new(db).await.expect("create manager");
         let index = manager
@@ -179,9 +183,13 @@ async fn connect_does_not_auto_register_unknown_identity() {
         db.set_control_plane_uri(&cp_uri)
             .await
             .expect("set control-plane uri");
-        db.upsert_key(&unknown_guid, ClientType::Device, &STANDARD.encode(private_key))
-            .await
-            .expect("store unknown key");
+        db.upsert_key(
+            &unknown_guid,
+            ClientType::Device,
+            &STANDARD.encode(private_key),
+        )
+        .await
+        .expect("store unknown key");
 
         let mut manager = ClientManager::new(db).await.expect("create manager");
         let err = manager
@@ -391,42 +399,9 @@ async fn create_test_database() -> (TempDir, ClientDatabase) {
 }
 
 fn generate_noise_keypair() -> (String, [u8; 32]) {
-    let params = REGISTRATION_NOISE_PATTERN
-        .parse()
-        .expect("parse noise pattern");
-    let keypair = snow::Builder::new(params)
-        .generate_keypair()
-        .expect("generate keypair");
-    let private_key: [u8; 32] = keypair
-        .private
-        .as_slice()
-        .try_into()
-        .expect("private key len");
-    (STANDARD.encode(&keypair.public), private_key)
-}
-
-fn create_noise_handshake(
-    private_key: &[u8; 32],
-    remote_public_key_b64: &str,
-    payload: &[u8],
-) -> String {
-    let remote_public_key = STANDARD
-        .decode(remote_public_key_b64)
-        .expect("decode remote key");
-    let params = REGISTRATION_NOISE_PATTERN
-        .parse()
-        .expect("parse noise pattern");
-    let mut initiator = snow::Builder::new(params)
-        .local_private_key(private_key)
-        .remote_public_key(&remote_public_key)
-        .build_initiator()
-        .expect("build initiator");
-
-    let mut message = vec![0_u8; payload.len() + 256];
-    let message_len = initiator
-        .write_message(payload, &mut message)
-        .expect("write handshake");
-    STANDARD.encode(&message[..message_len])
+    let private_key = generate_static_private_key().expect("generate keypair");
+    let public_key = encode_base64(&derive_public_key(&private_key));
+    (public_key, private_key)
 }
 
 async fn fetch_control_plane_noise_key(
@@ -453,15 +428,18 @@ async fn register_client(
 ) -> Client {
     let noise = fetch_control_plane_noise_key(http, control_plane_uri).await;
     let proof_payload = serde_json::to_vec(&ClientRegistrationProofPayload {
-        public_key,
-        client_type: &client_type,
+        public_key: public_key.to_string(),
+        client_type: client_type.clone(),
     })
     .expect("serialize client proof");
 
     let req = RegisterClientRequest {
         public_key: public_key.to_string(),
         client_type,
-        noise_handshake: create_noise_handshake(private_key, &noise.public_key, &proof_payload),
+        noise_handshake: STANDARD.encode(
+            create_registration_handshake(private_key, &noise.public_key, &proof_payload)
+                .expect("write handshake"),
+        ),
     };
     let res = http
         .post(format!("{}/clients", control_plane_uri))

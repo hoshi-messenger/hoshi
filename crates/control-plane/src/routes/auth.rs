@@ -6,6 +6,7 @@ use axum::{
 };
 use hoshi_protocol::control_plane::{
     ClientType, IssueRelayTokenRequest, IssueRelayTokenResponse, RelayJwtPublicKeyResponse,
+    RelayTokenProofPayload,
 };
 use jsonwebtoken::{Algorithm, Header, encode};
 use serde::{Deserialize, Serialize};
@@ -13,11 +14,6 @@ use serde::{Deserialize, Serialize};
 use crate::{ServerState, now};
 
 use super::common::{error_response, serialize_payload, verify_noise_proof};
-
-#[derive(Serialize)]
-struct RelayTokenProofPayload<'a> {
-    public_key: &'a str,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RelayTokenClaims {
@@ -48,7 +44,7 @@ pub(crate) async fn issue_relay_token_post(
         &payload.noise_handshake,
         |canonical_public_key| {
             serialize_payload(&RelayTokenProofPayload {
-                public_key: canonical_public_key,
+                public_key: canonical_public_key.to_string(),
             })
         },
     ) {

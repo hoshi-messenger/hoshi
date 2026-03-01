@@ -673,7 +673,12 @@ dependencies = [
 name = "hoshi-protocol"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "base64",
  "serde",
+ "serde_json",
+ "snow",
+ "x25519-dalek",
 ]
 
 [[package]]

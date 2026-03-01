@@ -1,6 +1,5 @@
 mod config;
 mod http;
-mod noise;
 mod routes;
 mod state;
 

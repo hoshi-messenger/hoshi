@@ -1,6 +1,5 @@
 mod config;
 mod connection;
-mod noise;
 
 pub use config::{ClientDatabase, StoredKey};
 pub use connection::{

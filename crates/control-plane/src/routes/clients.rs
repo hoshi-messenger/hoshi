@@ -5,19 +5,13 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use hoshi_protocol::control_plane::{
-    ClientEntry, ClientType, LookupClientResponse, RegisterClientRequest,
+    ClientEntry, ClientRegistrationProofPayload, ClientType, LookupClientResponse,
+    RegisterClientRequest,
 };
-use serde::Serialize;
 
 use crate::{Client, ClientType as DomainClientType, ServerState};
 
 use super::common::{error_response, serialize_payload, verify_noise_proof};
-
-#[derive(Serialize)]
-struct ClientRegistrationProofPayload<'a> {
-    public_key: &'a str,
-    client_type: &'a ClientType,
-}
 
 pub(crate) async fn register_client_post(
     State(state): State<ServerState>,
@@ -33,8 +27,8 @@ pub(crate) async fn register_client_post(
         &payload.noise_handshake,
         |canonical_public_key| {
             serialize_payload(&ClientRegistrationProofPayload {
-                public_key: canonical_public_key,
-                client_type: &payload.client_type,
+                public_key: canonical_public_key.to_string(),
+                client_type: payload.client_type.clone(),
             })
         },
     ) {

@@ -6,20 +6,13 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use hoshi_protocol::control_plane::{RegisterRelayRequest, RelayEntry};
-use serde::Serialize;
+use hoshi_protocol::control_plane::{
+    RegisterRelayRequest, RelayEntry, RelayRegistrationProofPayload,
+};
 
 use crate::ServerState;
 
 use super::common::{error_response, serialize_payload, verify_noise_proof};
-
-#[derive(Serialize)]
-struct RelayRegistrationProofPayload<'a> {
-    public_key: &'a str,
-    guid: &'a str,
-    api_key: &'a str,
-    port: u16,
-}
 
 pub(crate) async fn register_relay_post(
     State(state): State<ServerState>,
@@ -45,9 +38,9 @@ pub(crate) async fn register_relay_post(
         &payload.noise_handshake,
         |canonical_public_key| {
             serialize_payload(&RelayRegistrationProofPayload {
-                public_key: canonical_public_key,
-                guid: &guid,
-                api_key: &payload.api_key,
+                public_key: canonical_public_key.to_string(),
+                guid: guid.clone(),
+                api_key: payload.api_key.clone(),
                 port: payload.port,
             })
         },

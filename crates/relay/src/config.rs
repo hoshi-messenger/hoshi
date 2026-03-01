@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use hoshi_protocol::noise;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -69,16 +70,6 @@ fn generate_noise_static_private_key() -> String {
     STANDARD.encode(key)
 }
 
-fn canonicalize_base64_32(value: &str, field: &str) -> Result<String> {
-    let decoded = STANDARD
-        .decode(value)
-        .map_err(|_| anyhow!("invalid {field} base64"))?;
-    let decoded: [u8; 32] = decoded
-        .try_into()
-        .map_err(|_| anyhow!("invalid {field} length"))?;
-    Ok(STANDARD.encode(decoded))
-}
-
 impl ConfigToml {
     fn normalize(mut self) -> Result<Self> {
         self.control_plane_uri = if self.control_plane_uri.trim().is_empty() {
@@ -98,10 +89,11 @@ impl ConfigToml {
         self.noise_static_private_key = if self.noise_static_private_key.trim().is_empty() {
             generate_noise_static_private_key()
         } else {
-            canonicalize_base64_32(
+            noise::canonicalize_base64_32(
                 self.noise_static_private_key.trim(),
                 "noise_static_private_key",
             )?
+            .0
         };
 
         self.api_key = self.api_key.trim().to_string();

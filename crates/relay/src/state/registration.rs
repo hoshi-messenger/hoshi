@@ -1,22 +1,15 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use hoshi_protocol::control_plane::{NoisePublicKeyResponse, RegisterRelayRequest};
-use serde::Serialize;
+use hoshi_protocol::control_plane::{
+    NoisePublicKeyResponse, RegisterRelayRequest, RelayRegistrationProofPayload,
+};
+use hoshi_protocol::noise::{create_registration_handshake, encode_base64, serialize_payload};
 
 use super::ServerState;
-use crate::noise::{create_initiator_handshake, encode_base64, serialize_payload};
 
 const RELAY_REGISTRATION_SUCCESS_INTERVAL: Duration = Duration::from_secs(60);
 const RELAY_REGISTRATION_RETRY_INTERVAL: Duration = Duration::from_secs(10);
-
-#[derive(Debug, Serialize)]
-struct RelayRegistrationProofPayload<'a> {
-    public_key: &'a str,
-    guid: &'a str,
-    api_key: &'a str,
-    port: u16,
-}
 
 impl ServerState {
     pub async fn run_relay_registration_loop(self) {
@@ -61,13 +54,13 @@ impl ServerState {
             .context("failed to decode control-plane noise key payload")?;
 
         let proof_payload = RelayRegistrationProofPayload {
-            public_key: self.noise_public_key(),
-            guid: &self.config.guid,
-            api_key: &self.config.api_key,
+            public_key: self.noise_public_key().to_string(),
+            guid: self.config.guid.clone(),
+            api_key: self.config.api_key.clone(),
             port: self.config.http_bind_address.port(),
         };
         let proof_payload = serialize_payload(&proof_payload)?;
-        let handshake = create_initiator_handshake(
+        let handshake = create_registration_handshake(
             self.noise_static_private_key(),
             &noise_payload.public_key,
             &proof_payload,

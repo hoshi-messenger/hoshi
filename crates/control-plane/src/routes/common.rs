@@ -4,14 +4,13 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use hoshi_protocol::common::ErrorResponse;
+use hoshi_protocol::noise::{
+    canonicalize_base64_32, decode_base64, serialize_payload as noise_serialize_payload,
+    verify_registration_proof,
+};
 use serde::Serialize;
 
-use crate::{
-    ServerState,
-    noise::{
-        canonicalize_base64_32, decode_base64, serialize_proof_payload, verify_registration_proof,
-    },
-};
+use crate::ServerState;
 
 pub(crate) struct VerifiedNoiseProof {
     pub canonical_public_key: String,
@@ -39,7 +38,7 @@ pub(crate) fn error_response(status: StatusCode, message: impl Into<String>) -> 
 }
 
 pub(crate) fn serialize_payload<T: Serialize>(payload: &T) -> Result<Vec<u8>, RouteError> {
-    serialize_proof_payload(payload).map_err(|err| RouteError {
+    noise_serialize_payload(payload).map_err(|err| RouteError {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         message: err.to_string(),
     })

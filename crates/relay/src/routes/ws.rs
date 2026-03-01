@@ -1,9 +1,9 @@
 use axum::extract::ws::{Message, WebSocket};
+use hoshi_protocol::noise::accept_relay_responder_handshake;
 use hoshi_protocol::relay::{RelayErrorPacket, RelayPacket};
 
 use crate::{
     ServerState,
-    noise::accept_responder_handshake,
     state::{ConnectionIdentity, OutboundCommand},
 };
 
@@ -32,23 +32,25 @@ pub(super) async fn relay_socket_loop(
         return;
     }
 
-    let mut noise_transport =
-        match accept_responder_handshake(state.noise_static_private_key(), &handshake_message) {
-            Ok((transport, response_message)) => {
-                if socket
-                    .send(Message::Binary(response_message.into()))
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                transport
-            }
-            Err(_) => {
-                let _ = socket.send(Message::Close(None)).await;
+    let mut noise_transport = match accept_relay_responder_handshake(
+        state.noise_static_private_key(),
+        &handshake_message,
+    ) {
+        Ok((transport, response_message)) => {
+            if socket
+                .send(Message::Binary(response_message.into()))
+                .await
+                .is_err()
+            {
                 return;
             }
-        };
+            transport
+        }
+        Err(_) => {
+            let _ = socket.send(Message::Close(None)).await;
+            return;
+        }
+    };
 
     let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel();
     let session_id = state.register_session(&identity, outbound_tx);
