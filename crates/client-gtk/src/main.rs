@@ -1,7 +1,7 @@
-use adw::ApplicationWindow;
-use adw::prelude::AdwApplicationWindowExt;
-use gtk::{Button, prelude::*};
-use gtk::{Application, glib};
+use adw::{Application, ApplicationWindow, HeaderBar, NavigationPage, NavigationView, ToolbarView};
+use adw::prelude::{AdwApplicationWindowExt, NavigationPageExt};
+use gtk::{Box, Button, Orientation, prelude::*};
+use gtk::glib;
 
 const APP_ID: &str = "org.hoshi.hoshi-client-gtk";
 
@@ -17,13 +17,32 @@ fn main() -> glib::ExitCode {
 }
 
 fn build_ui(app: &Application) {
+
+    let navigation = NavigationView::builder()
+        .build();
+
+    let page = NavigationPage::builder()
+        .title("Hoshi Messenger")
+        .build();
+
+    navigation.push(&page);
+
+    let toolbar = ToolbarView::builder()
+        .top_bar_style(adw::ToolbarStyle::Flat)
+        .build();
+
+    let header_bar = HeaderBar::builder()
+        .build();
+
+    toolbar.add_top_bar(&header_bar);
+
+    let vbox = Box::builder()
+        .orientation(Orientation::Vertical)
+        .build();
+
     // Create a button with label and margins
     let button = Button::builder()
         .label("Press me!")
-        .margin_top(12)
-        .margin_bottom(12)
-        .margin_start(12)
-        .margin_end(12)
         .build();
 
     // Connect to "clicked" signal of `button`
@@ -31,14 +50,19 @@ fn build_ui(app: &Application) {
         // Set the label to "Hello World!" after the button has been clicked on
         button.set_label("Hello World!");
     });
+    
+    vbox.append(&button);
+    toolbar.set_content(Some(&vbox));
+
+    page.set_child(Some(&toolbar));
 
     // Create a window
     let window = ApplicationWindow::builder()
         .application(app)
-        .title("Hoshi Messenger")
+        //.title("Hoshi Messenger")
         .build();
 
-    window.set_content(Some(&button));
+    window.set_content(Some(&navigation));
 
     // Present window
     window.present();
