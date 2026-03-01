@@ -26,7 +26,7 @@ api_key = "{api_key}"
     Ok(())
 }
 
-pub async fn with_backend<F, Fut>(test: F)
+pub async fn with_relay<F, Fut>(test: F)
 where
     F: FnOnce(ServerState) -> Fut,
     Fut: Future<Output = ()>,
@@ -51,4 +51,12 @@ where
         .expect("create relay state");
 
     run(state.clone(), http_listener, test(state)).await;
+}
+
+pub async fn with_backend<F, Fut>(test: F)
+where
+    F: FnOnce(ServerState) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    with_relay(test).await;
 }

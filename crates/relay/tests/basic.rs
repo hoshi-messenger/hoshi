@@ -3,7 +3,7 @@ mod common;
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use common::{HealthzResponse, RelayApi, with_backend, write_test_config};
+use common::{HealthzResponse, RelayApi, with_relay, write_test_config};
 use hoshi_relay::{Config, ServerState, create_listeners, run};
 use reqwest::StatusCode;
 use tempfile::TempDir;
@@ -130,7 +130,7 @@ api_key = "   "
 
 #[tokio::test]
 async fn basic_http_routes() {
-    with_backend(|state| async move {
+    with_relay(|state| async move {
         let api = RelayApi::new(state.config.uri());
 
         let index = api.get_index().await.expect("index response");

@@ -16,7 +16,7 @@ pub use api::*;
 /// - Binds to port 0 for OS-assigned ports (enables parallel tests)
 /// - Passes the State to the test callback
 /// - Cleans up after the test completes
-pub async fn with_backend<F, Fut>(test: F)
+pub async fn with_control_plane<F, Fut>(test: F)
 where
     F: FnOnce(ServerState) -> Fut,
     Fut: Future<Output = ()>,
@@ -50,4 +50,12 @@ where
     run(state.clone(), http_listener, test(state)).await;
 
     std::fs::remove_dir_all(path).expect("Couldn't clean up TempDir");
+}
+
+pub async fn with_backend<F, Fut>(test: F)
+where
+    F: FnOnce(ServerState) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    with_control_plane(test).await;
 }

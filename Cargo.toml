@@ -2,6 +2,7 @@
 members = [
     "crates/control-plane",
     "crates/relay",
+    "crates/integration-tests",
 ]
 resolver = "2"
 

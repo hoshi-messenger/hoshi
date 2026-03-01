@@ -1,0 +1,14 @@
+[package]
+name = "hoshi-integration-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
+hoshi-control-plane = { path = "../control-plane" }
+hoshi-relay = { path = "../relay" }

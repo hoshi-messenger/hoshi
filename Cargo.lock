@@ -603,6 +603,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hoshi-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "hoshi-control-plane",
+ "hoshi-relay",
+ "reqwest",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "hoshi-relay"
 version = "0.1.0"
 dependencies = [
