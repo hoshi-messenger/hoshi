@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use common::with_control_plane_and_relay;
-use hoshi_clientlib::{ClientDatabase, ClientManager};
+use hoshi_clientlib::{ClientConnection, ClientDatabase, ClientManager};
 use hoshi_protocol::{
     control_plane::{
         ClientEntry as Client, ClientRegistrationProofPayload, ClientType, NoisePublicKeyResponse,
@@ -18,6 +18,9 @@ use hoshi_protocol::{
 use reqwest::StatusCode;
 use tempfile::TempDir;
 use uuid::Uuid;
+
+const MESSAGE_TIMEOUT: Duration = Duration::from_secs(2);
+const NO_MESSAGE_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[tokio::test]
 async fn database_open_creates_file_and_default_control_plane_uri() {
@@ -389,6 +392,304 @@ async fn send_message_to_self_roundtrips_via_relay() {
     .await;
 }
 
+#[tokio::test]
+async fn same_manager_same_guid_two_connections_fan_out_message() {
+    with_control_plane_and_relay(|control_plane, _relay| async move {
+        let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
+
+        let (public_key, private_key) = generate_noise_keypair();
+        let registered = register_client(
+            &http,
+            &cp_uri,
+            &public_key,
+            &private_key,
+            ClientType::Device,
+        )
+        .await;
+        let private_key_b64 = STANDARD.encode(private_key);
+
+        let (_db_dir, db) = create_test_database().await;
+        db.set_control_plane_uri(&cp_uri)
+            .await
+            .expect("set control-plane uri");
+
+        let mut manager = ClientManager::new(db).await.expect("create manager");
+        let sender = manager
+            .connect(&registered.id, &private_key_b64)
+            .await
+            .expect("connect sender");
+        let duplicate = manager
+            .connect(&registered.id, &private_key_b64)
+            .await
+            .expect("connect duplicate");
+
+        manager
+            .connection_mut(sender)
+            .expect("sender connection")
+            .send_text(&registered.id, "same-guid-fanout")
+            .await
+            .expect("send message");
+
+        let sender_received = receive_message_with_timeout(
+            manager.connection_mut(sender).expect("sender connection"),
+            MESSAGE_TIMEOUT,
+        )
+        .await;
+        assert_eq!(sender_received.recipient, registered.id);
+        assert_eq!(sender_received.payload, b"same-guid-fanout");
+
+        let duplicate_received = receive_message_with_timeout(
+            manager.connection_mut(duplicate).expect("duplicate connection"),
+            MESSAGE_TIMEOUT,
+        )
+        .await;
+        assert_eq!(duplicate_received.recipient, registered.id);
+        assert_eq!(duplicate_received.payload, b"same-guid-fanout");
+
+        assert_no_message_within(
+            manager.connection_mut(sender).expect("sender connection"),
+            NO_MESSAGE_TIMEOUT,
+        )
+        .await;
+        assert_no_message_within(
+            manager.connection_mut(duplicate).expect("duplicate connection"),
+            NO_MESSAGE_TIMEOUT,
+        )
+        .await;
+
+        manager.close_all().await.expect("close manager");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn same_manager_different_guids_routes_only_to_recipient() {
+    with_control_plane_and_relay(|control_plane, _relay| async move {
+        let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
+
+        let (a_public_key, a_private_key) = generate_noise_keypair();
+        let a = register_client(
+            &http,
+            &cp_uri,
+            &a_public_key,
+            &a_private_key,
+            ClientType::Device,
+        )
+        .await;
+
+        let (b_public_key, b_private_key) = generate_noise_keypair();
+        let b = register_client(
+            &http,
+            &cp_uri,
+            &b_public_key,
+            &b_private_key,
+            ClientType::Device,
+        )
+        .await;
+
+        let (_db_dir, db) = create_test_database().await;
+        db.set_control_plane_uri(&cp_uri)
+            .await
+            .expect("set control-plane uri");
+
+        let mut manager = ClientManager::new(db).await.expect("create manager");
+        let a_index = manager
+            .connect(&a.id, &STANDARD.encode(a_private_key))
+            .await
+            .expect("connect a");
+        let b_index = manager
+            .connect(&b.id, &STANDARD.encode(b_private_key))
+            .await
+            .expect("connect b");
+
+        manager
+            .connection_mut(a_index)
+            .expect("a connection")
+            .send_text(&b.id, "route-to-b")
+            .await
+            .expect("send message");
+
+        let b_received = receive_message_with_timeout(
+            manager.connection_mut(b_index).expect("b connection"),
+            MESSAGE_TIMEOUT,
+        )
+        .await;
+        assert_eq!(b_received.recipient, b.id);
+        assert_eq!(b_received.payload, b"route-to-b");
+
+        assert_no_message_within(
+            manager.connection_mut(a_index).expect("a connection"),
+            NO_MESSAGE_TIMEOUT,
+        )
+        .await;
+        assert_no_message_within(
+            manager.connection_mut(b_index).expect("b connection"),
+            NO_MESSAGE_TIMEOUT,
+        )
+        .await;
+
+        manager.close_all().await.expect("close manager");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn different_managers_different_guids_route_across_clientlibs() {
+    with_control_plane_and_relay(|control_plane, _relay| async move {
+        let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
+
+        let (a_public_key, a_private_key) = generate_noise_keypair();
+        let a = register_client(
+            &http,
+            &cp_uri,
+            &a_public_key,
+            &a_private_key,
+            ClientType::Device,
+        )
+        .await;
+
+        let (b_public_key, b_private_key) = generate_noise_keypair();
+        let b = register_client(
+            &http,
+            &cp_uri,
+            &b_public_key,
+            &b_private_key,
+            ClientType::Device,
+        )
+        .await;
+
+        let (_db_dir_a, db_a) = create_test_database().await;
+        db_a.set_control_plane_uri(&cp_uri)
+            .await
+            .expect("set control-plane uri");
+        let mut manager_a = ClientManager::new(db_a).await.expect("create manager a");
+        let a_index = manager_a
+            .connect(&a.id, &STANDARD.encode(a_private_key))
+            .await
+            .expect("connect a");
+
+        let (_db_dir_b, db_b) = create_test_database().await;
+        db_b.set_control_plane_uri(&cp_uri)
+            .await
+            .expect("set control-plane uri");
+        let mut manager_b = ClientManager::new(db_b).await.expect("create manager b");
+        let b_index = manager_b
+            .connect(&b.id, &STANDARD.encode(b_private_key))
+            .await
+            .expect("connect b");
+
+        manager_a
+            .connection_mut(a_index)
+            .expect("a connection")
+            .send_text(&b.id, "cross-manager-route")
+            .await
+            .expect("send message");
+
+        let b_received = receive_message_with_timeout(
+            manager_b.connection_mut(b_index).expect("b connection"),
+            MESSAGE_TIMEOUT,
+        )
+        .await;
+        assert_eq!(b_received.recipient, b.id);
+        assert_eq!(b_received.payload, b"cross-manager-route");
+
+        assert_no_message_within(
+            manager_a.connection_mut(a_index).expect("a connection"),
+            NO_MESSAGE_TIMEOUT,
+        )
+        .await;
+        assert_no_message_within(
+            manager_b.connection_mut(b_index).expect("b connection"),
+            NO_MESSAGE_TIMEOUT,
+        )
+        .await;
+
+        manager_a.close_all().await.expect("close manager a");
+        manager_b.close_all().await.expect("close manager b");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn different_managers_same_guid_two_connections_fan_out_message() {
+    with_control_plane_and_relay(|control_plane, _relay| async move {
+        let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
+
+        let (public_key, private_key) = generate_noise_keypair();
+        let registered = register_client(
+            &http,
+            &cp_uri,
+            &public_key,
+            &private_key,
+            ClientType::Device,
+        )
+        .await;
+        let private_key_b64 = STANDARD.encode(private_key);
+
+        let (_db_dir_a, db_a) = create_test_database().await;
+        db_a.set_control_plane_uri(&cp_uri)
+            .await
+            .expect("set control-plane uri");
+        let mut manager_a = ClientManager::new(db_a).await.expect("create manager a");
+        let a_index = manager_a
+            .connect(&registered.id, &private_key_b64)
+            .await
+            .expect("connect a");
+
+        let (_db_dir_b, db_b) = create_test_database().await;
+        db_b.set_control_plane_uri(&cp_uri)
+            .await
+            .expect("set control-plane uri");
+        let mut manager_b = ClientManager::new(db_b).await.expect("create manager b");
+        let b_index = manager_b
+            .connect(&registered.id, &private_key_b64)
+            .await
+            .expect("connect b");
+
+        manager_a
+            .connection_mut(a_index)
+            .expect("a connection")
+            .send_text(&registered.id, "same-guid-cross-manager-fanout")
+            .await
+            .expect("send message");
+
+        let a_received = receive_message_with_timeout(
+            manager_a.connection_mut(a_index).expect("a connection"),
+            MESSAGE_TIMEOUT,
+        )
+        .await;
+        assert_eq!(a_received.recipient, registered.id);
+        assert_eq!(a_received.payload, b"same-guid-cross-manager-fanout");
+
+        let b_received = receive_message_with_timeout(
+            manager_b.connection_mut(b_index).expect("b connection"),
+            MESSAGE_TIMEOUT,
+        )
+        .await;
+        assert_eq!(b_received.recipient, registered.id);
+        assert_eq!(b_received.payload, b"same-guid-cross-manager-fanout");
+
+        assert_no_message_within(
+            manager_a.connection_mut(a_index).expect("a connection"),
+            NO_MESSAGE_TIMEOUT,
+        )
+        .await;
+        assert_no_message_within(
+            manager_b.connection_mut(b_index).expect("b connection"),
+            NO_MESSAGE_TIMEOUT,
+        )
+        .await;
+
+        manager_a.close_all().await.expect("close manager a");
+        manager_b.close_all().await.expect("close manager b");
+    })
+    .await;
+}
+
 async fn create_test_database() -> (TempDir, ClientDatabase) {
     let dir = TempDir::new().expect("temp dir");
     let db_path = dir.path().join("client.sqlite3");
@@ -449,4 +750,25 @@ async fn register_client(
         .expect("register client");
     assert_eq!(res.status(), reqwest::StatusCode::CREATED);
     res.json::<Client>().await.expect("client")
+}
+
+async fn receive_message_with_timeout(
+    connection: &mut ClientConnection,
+    timeout: Duration,
+) -> hoshi_clientlib::ReceivedMessage {
+    tokio::time::timeout(timeout, connection.receive_message())
+        .await
+        .expect("timeout waiting for message")
+        .expect("receive message")
+}
+
+async fn assert_no_message_within(connection: &mut ClientConnection, timeout: Duration) {
+    match tokio::time::timeout(timeout, connection.receive_message()).await {
+        Err(_) => {}
+        Ok(Ok(message)) => panic!(
+            "expected no message within {:?}, got recipient={} payload={:?}",
+            timeout, message.recipient, message.payload
+        ),
+        Ok(Err(err)) => panic!("expected no message within {:?}, got error: {err:#}", timeout),
+    }
 }
