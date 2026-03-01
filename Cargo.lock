@@ -626,8 +626,9 @@ dependencies = [
  "snow",
  "tempfile",
  "tokio",
+ "tokio-rusqlite",
  "tokio-tungstenite",
- "toml",
+ "uuid",
  "x25519-dalek",
 ]
 

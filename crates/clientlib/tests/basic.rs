@@ -4,12 +4,14 @@ use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use common::with_control_plane_and_relay;
-use hoshi_clientlib::{ClientConfig, ClientConnection, ClientSession, UserAuthState};
+use hoshi_clientlib::{ClientDatabase, ClientManager};
 use hoshi_protocol::control_plane::{
-    ClientEntry as Client, ClientType, NoisePublicKeyResponse, RegisterClientRequest, RelayEntry,
+    ClientEntry as Client, ClientType, NoisePublicKeyResponse, RegisterClientRequest,
 };
+use reqwest::StatusCode;
 use serde::Serialize;
 use tempfile::TempDir;
+use uuid::Uuid;
 
 const REGISTRATION_NOISE_PATTERN: &str = "Noise_X_25519_ChaChaPoly_BLAKE2s";
 
@@ -20,138 +22,314 @@ struct ClientRegistrationProofPayload<'a> {
 }
 
 #[tokio::test]
-async fn config_load_creates_default_file_when_missing() {
+async fn database_open_creates_file_and_default_control_plane_uri() {
     let dir = TempDir::new().expect("temp dir");
-    let config_path = dir.path().join(".hoshi/client.toml");
+    let db_path = dir.path().join(".hoshi/client.sqlite3");
 
-    let config = ClientConfig::load_from_path(&config_path).expect("load client config");
-    assert!(config_path.exists(), "config file should be created");
-    assert_eq!(config.config_path, config_path);
+    let db = ClientDatabase::open(&db_path)
+        .await
+        .expect("open client database");
+    assert!(db_path.exists(), "db file should be created");
+    assert_eq!(db.db_path, db_path);
 
-    let raw = std::fs::read_to_string(&config_path).expect("read config");
-    let value = raw.parse::<toml::Value>().expect("parse toml");
-    let table = value.as_table().expect("table");
-
-    let uri = table
-        .get("control_plane_uri")
-        .and_then(toml::Value::as_str)
-        .expect("control_plane_uri");
+    let uri = db
+        .get_control_plane_uri()
+        .await
+        .expect("read default control_plane_uri");
     assert!(!uri.is_empty());
+}
 
-    let key = table
-        .get("device_noise_static_private_key")
-        .and_then(toml::Value::as_str)
-        .expect("device_noise_static_private_key");
-    let decoded = STANDARD.decode(key).expect("base64 decode");
+#[tokio::test]
+async fn database_config_key_value_roundtrip() {
+    let (_dir, db) = create_test_database().await;
+
+    let value = db.get_config("test").await.expect("read missing config");
+    assert!(value.is_none());
+
+    db.set_config("test", b"123")
+        .await
+        .expect("write binary config");
+    let value = db
+        .get_config("test")
+        .await
+        .expect("read binary config")
+        .expect("binary config should exist");
+    assert_eq!(value, b"123");
+
+    db.set_config_string("test_str", "hello")
+        .await
+        .expect("write string config");
+    let value = db
+        .get_config_string("test_str")
+        .await
+        .expect("read string config");
+    assert_eq!(value.as_deref(), Some("hello"));
+}
+
+#[tokio::test]
+async fn database_key_upsert_roundtrip() {
+    let (_dir, db) = create_test_database().await;
+
+    let (_public_key, private_key) = generate_noise_keypair();
+    let guid = Uuid::now_v7().to_string().to_uppercase();
+    let private_key_b64 = STANDARD.encode(private_key);
+
+    db.upsert_key(&guid, ClientType::Device, &private_key_b64)
+        .await
+        .expect("upsert key");
+
+    let stored = db
+        .get_key(&guid, ClientType::Device)
+        .await
+        .expect("get key")
+        .expect("key should exist");
+
+    assert_eq!(stored.guid, guid.to_lowercase());
+    assert_eq!(stored.client_type, ClientType::Device);
+    let decoded = STANDARD.decode(&stored.private_key).expect("base64 decode key");
     assert_eq!(decoded.len(), 32);
 
-    assert!(table.get("user_noise_static_private_key").is_none());
-    assert!(table.get("noise_static_private_key").is_none());
+    db.touch_key(&guid, ClientType::Device)
+        .await
+        .expect("touch key");
 }
 
 #[tokio::test]
-async fn config_load_normalizes_uri_and_keys() {
-    let dir = TempDir::new().expect("temp dir");
-    let config_path = dir.path().join("client.toml");
-    let device_key = STANDARD.encode([3_u8; 32]);
-    let user_key = STANDARD.encode([7_u8; 32]);
-    let raw = format!(
-        r#"
-control_plane_uri = "  http://127.0.0.1:2600  "
-device_noise_static_private_key = "  {device_key}  "
-user_noise_static_private_key = "  {user_key}  "
-"#
-    );
-    std::fs::write(&config_path, raw).expect("write config");
+async fn database_device_and_user_guid_roundtrip() {
+    let (_dir, db) = create_test_database().await;
+    let device_guid = Uuid::now_v7().to_string();
+    let user_guid = Uuid::now_v7().to_string();
 
-    let config = ClientConfig::load_from_path(&config_path).expect("load config");
-    assert_eq!(config.control_plane_uri, "http://127.0.0.1:2600");
-    assert_eq!(config.device_noise_static_private_key, device_key);
+    db.set_device_guid(&device_guid)
+        .await
+        .expect("set device guid");
+    db.set_user_guid(&user_guid).await.expect("set user guid");
+
     assert_eq!(
-        config.user_noise_static_private_key.as_deref(),
-        Some(user_key.as_str())
+        db.get_device_guid().await.expect("get device guid"),
+        Some(device_guid)
     );
+    assert_eq!(
+        db.get_user_guid().await.expect("get user guid"),
+        Some(user_guid)
+    );
+
+    db.clear_device_guid().await.expect("clear device guid");
+    db.clear_user_guid().await.expect("clear user guid");
+
+    assert_eq!(db.get_device_guid().await.expect("get device guid"), None);
+    assert_eq!(db.get_user_guid().await.expect("get user guid"), None);
 }
 
 #[tokio::test]
-async fn config_load_rejects_legacy_noise_static_private_key_field() {
-    let dir = TempDir::new().expect("temp dir");
-    let config_path = dir.path().join("client.toml");
-    let legacy_key = STANDARD.encode([9_u8; 32]);
-    let raw = format!(
-        r#"
-control_plane_uri = "http://127.0.0.1:2600"
-noise_static_private_key = "{legacy_key}"
-"#
-    );
-    std::fs::write(&config_path, raw).expect("write legacy config");
-
-    let err = ClientConfig::load_from_path(&config_path).expect_err("legacy config should fail");
-    assert!(
-        err.to_string().contains("noise_static_private_key"),
-        "unexpected error: {err:#}"
-    );
-}
-
-#[tokio::test]
-async fn connect_auto_registers_device_when_unknown() {
+async fn connect_from_store_succeeds_for_registered_device() {
     with_control_plane_and_relay(|control_plane, _relay| async move {
         let cp_uri = control_plane.config.uri();
         let http = reqwest::Client::new();
-        let (_public_key, private_key) = generate_noise_keypair();
-        let _relay = wait_for_registered_relay(&http, &cp_uri).await;
-        let (_config_dir, config_path) = write_client_config(&cp_uri, &private_key, None);
-        let config = ClientConfig::load_from_path(&config_path).expect("load config");
 
-        let mut connection = ClientConnection::connect_with_config(config)
+        let (public_key, private_key) = generate_noise_keypair();
+        let registered = register_client(
+            &http,
+            &cp_uri,
+            &public_key,
+            &private_key,
+            ClientType::Device,
+        )
+        .await;
+
+        let (_db_dir, db) = create_test_database().await;
+        db.set_control_plane_uri(&cp_uri)
             .await
-            .expect("connect should auto-register device");
-        assert_eq!(connection.client_type(), ClientType::Device);
-        assert!(!connection.relay_guid().is_empty());
-
-        let lookup = http
-            .get(format!("{}/clients/{}", cp_uri, connection.guid()))
-            .send()
+            .expect("set control-plane uri");
+        db.upsert_key(&registered.id, ClientType::Device, &STANDARD.encode(private_key))
             .await
-            .expect("lookup device guid");
-        assert_eq!(lookup.status(), reqwest::StatusCode::OK);
+            .expect("store device key");
 
-        connection.close().await.expect("close connection");
+        let mut manager = ClientManager::new(db).await.expect("create manager");
+        let index = manager
+            .connect_from_store(&registered.id, ClientType::Device)
+            .await
+            .expect("connect stored device");
+
+        assert_eq!(index, 0);
+        assert_eq!(manager.connections().len(), 1);
+        assert_eq!(
+            manager
+                .connection(index)
+                .expect("device connection")
+                .client_type(),
+            ClientType::Device
+        );
+
+        manager.close_all().await.expect("close manager");
     })
     .await;
 }
 
 #[tokio::test]
-async fn connect_to_stack_succeeds_for_registered_device() {
+async fn connect_does_not_auto_register_unknown_identity() {
     with_control_plane_and_relay(|control_plane, _relay| async move {
         let cp_uri = control_plane.config.uri();
         let http = reqwest::Client::new();
 
-        let (sender_public_key, sender_private_key) = generate_noise_keypair();
-        let sender = register_client(
+        let (_public_key, private_key) = generate_noise_keypair();
+        let unknown_guid = Uuid::now_v7().to_string();
+
+        let (_db_dir, db) = create_test_database().await;
+        db.set_control_plane_uri(&cp_uri)
+            .await
+            .expect("set control-plane uri");
+        db.upsert_key(&unknown_guid, ClientType::Device, &STANDARD.encode(private_key))
+            .await
+            .expect("store unknown key");
+
+        let mut manager = ClientManager::new(db).await.expect("create manager");
+        let err = manager
+            .connect_from_store(&unknown_guid, ClientType::Device)
+            .await
+            .expect_err("unknown identity should fail");
+
+        assert!(
+            err.to_string().contains("unknown client identity"),
+            "unexpected error: {err:#}"
+        );
+
+        let lookup = http
+            .get(format!("{}/clients/{}", cp_uri, unknown_guid))
+            .send()
+            .await
+            .expect("lookup unknown guid");
+        assert_eq!(lookup.status(), StatusCode::NOT_FOUND);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn connect_configured_is_best_effort_per_guid() {
+    with_control_plane_and_relay(|control_plane, _relay| async move {
+        let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
+
+        let (device_public_key, device_private_key) = generate_noise_keypair();
+        let registered_device = register_client(
             &http,
             &cp_uri,
-            &sender_public_key,
-            &sender_private_key,
+            &device_public_key,
+            &device_private_key,
             ClientType::Device,
         )
         .await;
 
-        let _relay = wait_for_registered_relay(&http, &cp_uri).await;
+        let (_unknown_user_public_key, unknown_user_private_key) = generate_noise_keypair();
+        let unknown_user_guid = Uuid::now_v7().to_string();
 
-        let (_sender_config_dir, sender_config_path) =
-            write_client_config(&cp_uri, &sender_private_key, None);
-        let sender_config =
-            ClientConfig::load_from_path(&sender_config_path).expect("load sender config");
-        let mut sender_connection = ClientConnection::connect_with_config(sender_config)
+        let (_db_dir, db) = create_test_database().await;
+        db.set_control_plane_uri(&cp_uri)
             .await
-            .expect("connect sender");
+            .expect("set control-plane uri");
+        db.upsert_key(
+            &registered_device.id,
+            ClientType::Device,
+            &STANDARD.encode(device_private_key),
+        )
+        .await
+        .expect("store device key");
+        db.set_device_guid(&registered_device.id)
+            .await
+            .expect("set device guid");
+        db.upsert_key(
+            &unknown_user_guid,
+            ClientType::User,
+            &STANDARD.encode(unknown_user_private_key),
+        )
+        .await
+        .expect("store user key");
+        db.set_user_guid(&unknown_user_guid)
+            .await
+            .expect("set user guid");
 
-        assert_eq!(sender_connection.guid(), sender.id);
-        assert_eq!(sender_connection.client_type(), ClientType::Device);
-        assert!(!sender_connection.relay_guid().is_empty());
+        let mut manager = ClientManager::new(db).await.expect("create manager");
+        let report = manager
+            .connect_configured()
+            .await
+            .expect("connect configured");
 
-        sender_connection.close().await.expect("close sender");
+        assert_eq!(report.connected_indices.len(), 1);
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].config_key, "user_guid");
+        assert_eq!(report.errors[0].guid, unknown_user_guid);
+        assert_eq!(report.errors[0].client_type, ClientType::User);
+        assert_eq!(manager.connections().len(), 1);
+        assert_eq!(
+            manager.connections()[0].client_type(),
+            ClientType::Device,
+            "device connection should succeed"
+        );
+
+        manager.close_all().await.expect("close manager");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn manager_keeps_multiple_open_connections() {
+    with_control_plane_and_relay(|control_plane, _relay| async move {
+        let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
+
+        let (device_public_key, device_private_key) = generate_noise_keypair();
+        let registered_device = register_client(
+            &http,
+            &cp_uri,
+            &device_public_key,
+            &device_private_key,
+            ClientType::Device,
+        )
+        .await;
+
+        let (user_public_key, user_private_key) = generate_noise_keypair();
+        let registered_user = register_client(
+            &http,
+            &cp_uri,
+            &user_public_key,
+            &user_private_key,
+            ClientType::User,
+        )
+        .await;
+
+        let (_db_dir, db) = create_test_database().await;
+        db.set_control_plane_uri(&cp_uri)
+            .await
+            .expect("set control-plane uri");
+
+        let mut manager = ClientManager::new(db).await.expect("create manager");
+
+        let device_index = manager
+            .connect(&registered_device.id, &STANDARD.encode(device_private_key))
+            .await
+            .expect("connect device");
+        let user_index = manager
+            .connect(&registered_user.id, &STANDARD.encode(user_private_key))
+            .await
+            .expect("connect user");
+
+        assert_eq!(device_index, 0);
+        assert_eq!(user_index, 1);
+        assert_eq!(manager.connections().len(), 2);
+        assert!(
+            manager
+                .connections()
+                .iter()
+                .any(|connection| connection.client_type() == ClientType::Device)
+        );
+        assert!(
+            manager
+                .connections()
+                .iter()
+                .any(|connection| connection.client_type() == ClientType::User)
+        );
+
+        manager.close_all().await.expect("close manager");
     })
     .await;
 }
@@ -172,204 +350,44 @@ async fn send_message_to_self_roundtrips_via_relay() {
         )
         .await;
 
-        let _relay = wait_for_registered_relay(&http, &cp_uri).await;
-
-        let (_config_dir, config_path) = write_client_config(&cp_uri, &private_key, None);
-        let config = ClientConfig::load_from_path(&config_path).expect("load config");
-        let mut connection = ClientConnection::connect_with_config(config)
+        let (_db_dir, db) = create_test_database().await;
+        db.set_control_plane_uri(&cp_uri)
             .await
-            .expect("connect client");
+            .expect("set control-plane uri");
 
-        let self_guid = connection.guid().to_string();
-        assert_eq!(self_guid, registered.id);
+        let mut manager = ClientManager::new(db).await.expect("create manager");
+        let index = manager
+            .connect(&registered.id, &STANDARD.encode(private_key))
+            .await
+            .expect("connect device");
 
+        let connection = manager
+            .connection_mut(index)
+            .expect("connected client should exist");
         connection
-            .send_text(&self_guid, "self-loopback-message")
+            .send_text(&registered.id, "self-loopback-message")
             .await
-            .expect("send to self");
+            .expect("send message");
 
         let received = tokio::time::timeout(Duration::from_secs(2), connection.receive_message())
             .await
-            .expect("timeout waiting for self-loop message")
-            .expect("receive self-loop message");
-        assert_eq!(received.recipient, self_guid);
+            .expect("timeout waiting for loopback message")
+            .expect("receive message");
+        assert_eq!(received.recipient, registered.id);
         assert_eq!(received.payload, b"self-loopback-message");
 
-        connection.close().await.expect("close connection");
+        manager.close_all().await.expect("close manager");
     })
     .await;
 }
 
-#[tokio::test]
-async fn client_session_reports_no_local_user_identity_when_missing() {
-    with_control_plane_and_relay(|control_plane, _relay| async move {
-        let cp_uri = control_plane.config.uri();
-        let http = reqwest::Client::new();
-        let (device_public_key, device_private_key) = generate_noise_keypair();
-        let _device = register_client(
-            &http,
-            &cp_uri,
-            &device_public_key,
-            &device_private_key,
-            ClientType::Device,
-        )
-        .await;
-
-        let (_config_dir, config_path) = write_client_config(&cp_uri, &device_private_key, None);
-        let config = ClientConfig::load_from_path(&config_path).expect("load config");
-        let mut session = ClientSession::connect_with_config(config)
-            .await
-            .expect("connect session");
-
-        assert_eq!(session.user_auth_state(), UserAuthState::NoLocalIdentity);
-        assert!(session.user_connection().is_none());
-        assert_eq!(
-            session.device_connection().client_type(),
-            ClientType::Device
-        );
-
-        session.close().await.expect("close session");
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn client_session_reports_unknown_user_identity_without_failing() {
-    with_control_plane_and_relay(|control_plane, _relay| async move {
-        let cp_uri = control_plane.config.uri();
-        let http = reqwest::Client::new();
-        let (device_public_key, device_private_key) = generate_noise_keypair();
-        let _device = register_client(
-            &http,
-            &cp_uri,
-            &device_public_key,
-            &device_private_key,
-            ClientType::Device,
-        )
-        .await;
-
-        let (_unknown_user_public_key, unknown_user_private_key) = generate_noise_keypair();
-        let (_config_dir, config_path) = write_client_config(
-            &cp_uri,
-            &device_private_key,
-            Some(&unknown_user_private_key),
-        );
-        let config = ClientConfig::load_from_path(&config_path).expect("load config");
-        let mut session = ClientSession::connect_with_config(config)
-            .await
-            .expect("connect session");
-
-        assert_eq!(session.user_auth_state(), UserAuthState::UnknownIdentity);
-        assert!(session.user_connection().is_none());
-        assert_eq!(
-            session.device_connection().client_type(),
-            ClientType::Device
-        );
-
-        session.close().await.expect("close session");
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn client_session_connects_device_and_user_on_same_relay() {
-    with_control_plane_and_relay(|control_plane, _relay| async move {
-        let cp_uri = control_plane.config.uri();
-        let http = reqwest::Client::new();
-        let (device_public_key, device_private_key) = generate_noise_keypair();
-        let _device = register_client(
-            &http,
-            &cp_uri,
-            &device_public_key,
-            &device_private_key,
-            ClientType::Device,
-        )
-        .await;
-        let (user_public_key, user_private_key) = generate_noise_keypair();
-        let _user = register_client(
-            &http,
-            &cp_uri,
-            &user_public_key,
-            &user_private_key,
-            ClientType::User,
-        )
-        .await;
-
-        let (_config_dir, config_path) =
-            write_client_config(&cp_uri, &device_private_key, Some(&user_private_key));
-        let config = ClientConfig::load_from_path(&config_path).expect("load config");
-        let mut session = ClientSession::connect_with_config(config)
-            .await
-            .expect("connect session");
-
-        assert_eq!(session.user_auth_state(), UserAuthState::Connected);
-        let user_connection = session
-            .user_connection()
-            .expect("user connection should be present");
-        assert_eq!(user_connection.client_type(), ClientType::User);
-        assert_eq!(
-            user_connection.relay_guid(),
-            session.device_connection().relay_guid()
-        );
-        assert_eq!(
-            session.relay_guid(),
-            session.device_connection().relay_guid()
-        );
-
-        session.close().await.expect("close session");
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn connect_does_not_persist_jwt_in_config() {
-    with_control_plane_and_relay(|control_plane, _relay| async move {
-        let cp_uri = control_plane.config.uri();
-        let http = reqwest::Client::new();
-        let (_sender_public_key, sender_private_key) = generate_noise_keypair();
-        let _relay = wait_for_registered_relay(&http, &cp_uri).await;
-
-        let (_config_dir, config_path) = write_client_config(&cp_uri, &sender_private_key, None);
-        let config = ClientConfig::load_from_path(&config_path).expect("load config");
-        let mut connection = ClientConnection::connect_with_config(config)
-            .await
-            .expect("connect sender");
-        connection.close().await.expect("close connection");
-
-        let raw = std::fs::read_to_string(&config_path).expect("read config");
-        let value = raw.parse::<toml::Value>().expect("parse toml");
-        let table = value.as_table().expect("table");
-        assert_eq!(table.len(), 2);
-        assert!(table.contains_key("control_plane_uri"));
-        assert!(table.contains_key("device_noise_static_private_key"));
-        assert!(!table.contains_key("token"));
-        assert!(!table.contains_key("jwt"));
-    })
-    .await;
-}
-
-fn write_client_config(
-    control_plane_uri: &str,
-    device_private_key: &[u8; 32],
-    user_private_key: Option<&[u8; 32]>,
-) -> (TempDir, std::path::PathBuf) {
+async fn create_test_database() -> (TempDir, ClientDatabase) {
     let dir = TempDir::new().expect("temp dir");
-    let config_path = dir.path().join("client.toml");
-    let device_key = STANDARD.encode(device_private_key);
-    let mut content = format!(
-        r#"
-control_plane_uri = "{control_plane_uri}"
-device_noise_static_private_key = "{device_key}"
-"#
-    );
-
-    if let Some(user_private_key) = user_private_key {
-        let user_key = STANDARD.encode(user_private_key);
-        content.push_str(&format!("user_noise_static_private_key = \"{user_key}\"\n"));
-    }
-
-    std::fs::write(&config_path, content).expect("write config");
-    (dir, config_path)
+    let db_path = dir.path().join("client.sqlite3");
+    let db = ClientDatabase::open(&db_path)
+        .await
+        .expect("open test client database");
+    (dir, db)
 }
 
 fn generate_noise_keypair() -> (String, [u8; 32]) {
@@ -453,26 +471,4 @@ async fn register_client(
         .expect("register client");
     assert_eq!(res.status(), reqwest::StatusCode::CREATED);
     res.json::<Client>().await.expect("client")
-}
-
-async fn wait_for_registered_relay(http: &reqwest::Client, control_plane_uri: &str) -> RelayEntry {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let res = http
-            .get(format!("{}/relays", control_plane_uri))
-            .send()
-            .await
-            .expect("list relays");
-        assert!(res.status().is_success());
-        let relays = res.json::<Vec<RelayEntry>>().await.expect("relay list");
-        if let Some(relay) = relays.into_iter().next() {
-            return relay;
-        }
-
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "relay registration did not complete in time"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
 }

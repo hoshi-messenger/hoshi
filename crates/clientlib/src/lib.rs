@@ -2,5 +2,8 @@ mod config;
 mod connection;
 mod noise;
 
-pub use config::ClientConfig;
-pub use connection::{ClientConnection, ClientSession, ReceivedMessage, UserAuthState};
+pub use config::{ClientDatabase, StoredKey};
+pub use connection::{
+    ClientConnection, ClientManager, ConnectConfiguredError, ConnectConfiguredReport,
+    ReceivedMessage,
+};

@@ -14,10 +14,11 @@ x25519-dalek = { workspace = true }
 snow = { workspace = true }
 rand_core = { workspace = true }
 dirs = { workspace = true }
-toml = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 hoshi-protocol = { workspace = true }
+tokio-rusqlite = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -6,7 +6,7 @@ use hoshi_protocol::{
     common::ErrorResponse,
     control_plane::{
         ClientType, IssueRelayTokenRequest, IssueRelayTokenResponse, LookupClientResponse,
-        NoisePublicKeyResponse, RegisterClientRequest, RelayEntry,
+        NoisePublicKeyResponse, RelayEntry,
     },
     relay::{RelayErrorPacket, RelayPacket},
 };
@@ -22,12 +22,13 @@ use tokio_tungstenite::{
         http::{HeaderValue, header},
     },
 };
+use uuid::Uuid;
 
 use crate::{
-    ClientConfig,
+    ClientDatabase,
     noise::{
         E2EE_NOISE_PATTERN, create_registration_handshake, create_relay_initiator_handshake,
-        decode_base64, decrypt_e2ee_payload, derive_public_key, encode_base64,
+        decode_base64, decode_base64_32, decrypt_e2ee_payload, derive_public_key, encode_base64,
         encrypt_e2ee_payload, finish_relay_initiator_handshake,
     },
 };
@@ -37,12 +38,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Debug, Serialize)]
 struct RelayTokenProofPayload<'a> {
     public_key: &'a str,
-}
-
-#[derive(Debug, Serialize)]
-struct ClientRegistrationProofPayload<'a> {
-    public_key: &'a str,
-    client_type: &'a ClientType,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -58,138 +53,192 @@ pub struct ReceivedMessage {
     pub payload: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UserAuthState {
-    Connected,
-    NoLocalIdentity,
-    UnknownIdentity,
+#[derive(Debug, Clone)]
+pub struct ConnectConfiguredReport {
+    pub connected_indices: Vec<usize>,
+    pub errors: Vec<ConnectConfiguredError>,
 }
 
-pub struct ClientSession {
-    device_connection: ClientConnection,
-    user_connection: Option<ClientConnection>,
-    user_auth_state: UserAuthState,
+#[derive(Debug, Clone)]
+pub struct ConnectConfiguredError {
+    pub config_key: String,
+    pub guid: String,
+    pub client_type: ClientType,
+    pub error: String,
 }
 
-impl ClientSession {
-    pub async fn connect() -> Result<Self> {
-        let config = ClientConfig::new()?;
-        Self::connect_with_config(config).await
+pub struct ClientManager {
+    db: ClientDatabase,
+    http_client: reqwest::Client,
+    connections: Vec<ClientConnection>,
+}
+
+impl ClientManager {
+    pub async fn new_default() -> Result<Self> {
+        let db = ClientDatabase::open_default().await?;
+        Self::new(db).await
     }
 
-    pub async fn connect_with_config(config: ClientConfig) -> Result<Self> {
+    pub async fn new(db: ClientDatabase) -> Result<Self> {
         let http_client = build_http_client()?;
-        let cp_uri = config.control_plane_uri.trim_end_matches('/');
-        let cp_noise = fetch_control_plane_noise_key(&http_client, cp_uri).await?;
-        let relay = select_relay(&http_client, cp_uri).await?;
-
-        let device_private_key = config.device_noise_static_private_key_bytes()?;
-        let device_token = issue_device_token_with_registration(
-            &http_client,
-            cp_uri,
-            &device_private_key,
-            &cp_noise.public_key,
-        )
-        .await?;
-        ensure_token_identity_type(&device_token, ClientType::Device)?;
-
-        let device_connection = connect_authenticated_identity(
-            config.clone(),
-            http_client.clone(),
-            &relay,
-            device_private_key,
-            &device_token,
-        )
-        .await?;
-
-        let user_private_key = config.user_noise_static_private_key_bytes()?;
-        let (user_connection, user_auth_state) = if let Some(user_private_key) = user_private_key {
-            let user_public_key = encode_base64(&derive_public_key(&user_private_key));
-            match issue_relay_token(
-                &http_client,
-                cp_uri,
-                &user_private_key,
-                &user_public_key,
-                &cp_noise.public_key,
-            )
-            .await
-            {
-                Ok(user_token) => {
-                    ensure_token_identity_type(&user_token, ClientType::User)?;
-                    let user_connection = connect_authenticated_identity(
-                        config.clone(),
-                        http_client.clone(),
-                        &relay,
-                        user_private_key,
-                        &user_token,
-                    )
-                    .await?;
-                    (Some(user_connection), UserAuthState::Connected)
-                }
-                Err(RelayTokenIssueError::UnknownClient) => (None, UserAuthState::UnknownIdentity),
-                Err(RelayTokenIssueError::Other(err)) => {
-                    return Err(err.context("failed to authenticate user identity"));
-                }
-            }
-        } else {
-            (None, UserAuthState::NoLocalIdentity)
-        };
-
         Ok(Self {
-            device_connection,
-            user_connection,
-            user_auth_state,
+            db,
+            http_client,
+            connections: Vec::new(),
         })
     }
 
-    pub fn device_connection(&self) -> &ClientConnection {
-        &self.device_connection
+    pub async fn connect(&mut self, guid: &str, private_key_b64: &str) -> Result<usize> {
+        self.connect_internal(guid, private_key_b64, None).await
     }
 
-    pub fn device_connection_mut(&mut self) -> &mut ClientConnection {
-        &mut self.device_connection
+    pub async fn connect_from_store(&mut self, guid: &str, client_type: ClientType) -> Result<usize> {
+        let key = self
+            .db
+            .get_key(guid, client_type.clone())
+            .await?
+            .ok_or_else(|| anyhow!("missing local key for guid {} ({:?})", guid, client_type))?;
+
+        self.connect_internal(&key.guid, &key.private_key, Some(client_type))
+            .await
     }
 
-    pub fn user_connection(&self) -> Option<&ClientConnection> {
-        self.user_connection.as_ref()
+    pub async fn connect_configured(&mut self) -> Result<ConnectConfiguredReport> {
+        let mut report = ConnectConfiguredReport {
+            connected_indices: Vec::new(),
+            errors: Vec::new(),
+        };
+
+        let configured = vec![
+            (
+                "device_guid".to_string(),
+                self.db.get_device_guid().await?,
+                ClientType::Device,
+            ),
+            (
+                "user_guid".to_string(),
+                self.db.get_user_guid().await?,
+                ClientType::User,
+            ),
+        ];
+
+        for (config_key, guid, client_type) in configured {
+            let Some(guid) = guid else {
+                continue;
+            };
+
+            match self.connect_from_store(&guid, client_type.clone()).await {
+                Ok(index) => report.connected_indices.push(index),
+                Err(err) => report.errors.push(ConnectConfiguredError {
+                    config_key,
+                    guid,
+                    client_type,
+                    error: err.to_string(),
+                }),
+            }
+        }
+
+        Ok(report)
     }
 
-    pub fn user_connection_mut(&mut self) -> Option<&mut ClientConnection> {
-        self.user_connection.as_mut()
+    pub fn connections(&self) -> &[ClientConnection] {
+        &self.connections
     }
 
-    pub fn user_auth_state(&self) -> UserAuthState {
-        self.user_auth_state
+    pub fn connection(&self, index: usize) -> Option<&ClientConnection> {
+        self.connections.get(index)
     }
 
-    pub fn relay_guid(&self) -> &str {
-        self.device_connection.relay_guid()
+    pub fn connection_mut(&mut self, index: usize) -> Option<&mut ClientConnection> {
+        self.connections.get_mut(index)
     }
 
-    pub async fn close(&mut self) -> Result<()> {
+    pub async fn close_all(&mut self) -> Result<()> {
         let mut first_error: Option<anyhow::Error> = None;
 
-        if let Some(user_connection) = self.user_connection.as_mut() {
-            if let Err(err) = user_connection.close().await {
-                first_error = Some(err);
+        for connection in self.connections.iter_mut() {
+            if let Err(err) = connection.close().await {
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
             }
         }
 
-        if let Err(err) = self.device_connection.close().await {
-            if first_error.is_none() {
-                first_error = Some(err);
-            }
-        }
+        self.connections.clear();
 
         if let Some(err) = first_error {
             return Err(err);
         }
+
         Ok(())
+    }
+
+    async fn connect_internal(
+        &mut self,
+        guid: &str,
+        private_key_b64: &str,
+        expected_client_type: Option<ClientType>,
+    ) -> Result<usize> {
+        let guid = canonicalize_guid(guid)?;
+        let local_private_key = decode_base64_32(private_key_b64.trim(), "private_key")?;
+        let control_plane_uri = self.db.get_control_plane_uri().await?;
+        let control_plane_uri = control_plane_uri.trim_end_matches('/').to_string();
+
+        let cp_noise = fetch_control_plane_noise_key(&self.http_client, &control_plane_uri).await?;
+        let relay = select_relay(&self.http_client, &control_plane_uri).await?;
+
+        let local_public_key = encode_base64(&derive_public_key(&local_private_key));
+        let token = match issue_relay_token(
+            &self.http_client,
+            &control_plane_uri,
+            &local_private_key,
+            &local_public_key,
+            &cp_noise.public_key,
+        )
+        .await
+        {
+            Ok(token) => token,
+            Err(RelayTokenIssueError::UnknownClient) => {
+                bail!("unknown client identity for guid {}", guid)
+            }
+            Err(RelayTokenIssueError::Other(err)) => {
+                return Err(err.context("failed to issue relay token"));
+            }
+        };
+
+        if token.guid != guid {
+            bail!(
+                "relay token guid mismatch: requested {}, got {}",
+                guid,
+                token.guid
+            );
+        }
+
+        if let Some(expected_client_type) = expected_client_type {
+            ensure_token_identity_type(&token, expected_client_type)?;
+        }
+
+        let connection = connect_authenticated_identity(
+            self.http_client.clone(),
+            &control_plane_uri,
+            &relay,
+            local_private_key,
+            &token,
+        )
+        .await?;
+
+        self.db
+            .upsert_key(&guid, token.client_type.clone(), private_key_b64)
+            .await?;
+
+        let index = self.connections.len();
+        self.connections.push(connection);
+        Ok(index)
     }
 }
 
 pub struct ClientConnection {
-    config: ClientConfig,
+    control_plane_uri: String,
     http_client: reqwest::Client,
     websocket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     relay_transport: snow::TransportState,
@@ -200,38 +249,13 @@ pub struct ClientConnection {
 }
 
 impl ClientConnection {
-    pub async fn connect() -> Result<Self> {
-        let config = ClientConfig::new()?;
-        Self::connect_with_config(config).await
-    }
-
-    pub async fn connect_with_config(config: ClientConfig) -> Result<Self> {
-        let http_client = build_http_client()?;
-
-        let cp_uri = config.control_plane_uri.trim_end_matches('/');
-        let cp_noise = fetch_control_plane_noise_key(&http_client, cp_uri).await?;
-        let relay = select_relay(&http_client, cp_uri).await?;
-        let device_private_key = config.device_noise_static_private_key_bytes()?;
-        let token = issue_device_token_with_registration(
-            &http_client,
-            cp_uri,
-            &device_private_key,
-            &cp_noise.public_key,
-        )
-        .await?;
-        ensure_token_identity_type(&token, ClientType::Device)?;
-
-        connect_authenticated_identity(config, http_client, &relay, device_private_key, &token)
-            .await
-    }
-
     pub async fn send_message(&mut self, recipient_guid: &str, payload: &[u8]) -> Result<()> {
         let recipient_guid = recipient_guid.trim();
         if recipient_guid.is_empty() {
             bail!("recipient guid must not be empty");
         }
 
-        let cp_uri = self.config.control_plane_uri.trim_end_matches('/');
+        let cp_uri = self.control_plane_uri.trim_end_matches('/');
         let lookup_endpoint = format!("{cp_uri}/clients/{recipient_guid}");
         let lookup_response = self
             .http_client
@@ -363,6 +387,10 @@ fn build_http_client() -> Result<reqwest::Client> {
         .context("failed to build client http client")
 }
 
+fn canonicalize_guid(guid: &str) -> Result<String> {
+    Ok(Uuid::parse_str(guid.trim()).context("invalid guid")?.to_string())
+}
+
 fn ensure_token_identity_type(
     token: &IssueRelayTokenResponse,
     expected_client_type: ClientType,
@@ -378,8 +406,8 @@ fn ensure_token_identity_type(
 }
 
 async fn connect_authenticated_identity(
-    config: ClientConfig,
     http_client: reqwest::Client,
+    control_plane_uri: &str,
     relay: &RelayEntry,
     local_private_key: [u8; 32],
     token: &IssueRelayTokenResponse,
@@ -388,7 +416,7 @@ async fn connect_authenticated_identity(
     let _ = websocket.flush().await;
 
     Ok(ClientConnection {
-        config,
+        control_plane_uri: control_plane_uri.to_string(),
         http_client,
         websocket,
         relay_transport,
@@ -417,89 +445,6 @@ async fn fetch_control_plane_noise_key(
         .json::<NoisePublicKeyResponse>()
         .await
         .context("failed to decode control-plane noise key payload")
-}
-
-async fn issue_device_token_with_registration(
-    http_client: &reqwest::Client,
-    control_plane_uri: &str,
-    noise_private_key: &[u8; 32],
-    cp_noise_public_key: &str,
-) -> Result<IssueRelayTokenResponse> {
-    let noise_public_key = encode_base64(&derive_public_key(noise_private_key));
-    match issue_relay_token(
-        http_client,
-        control_plane_uri,
-        noise_private_key,
-        &noise_public_key,
-        cp_noise_public_key,
-    )
-    .await
-    {
-        Ok(token) => Ok(token),
-        Err(RelayTokenIssueError::Other(err)) => Err(err),
-        Err(RelayTokenIssueError::UnknownClient) => {
-            register_client_identity(
-                http_client,
-                control_plane_uri,
-                noise_private_key,
-                &noise_public_key,
-                cp_noise_public_key,
-                ClientType::Device,
-            )
-            .await?;
-
-            match issue_relay_token(
-                http_client,
-                control_plane_uri,
-                noise_private_key,
-                &noise_public_key,
-                cp_noise_public_key,
-            )
-            .await
-            {
-                Ok(token) => Ok(token),
-                Err(RelayTokenIssueError::UnknownClient) => {
-                    Err(anyhow!("client remained unknown after registration"))
-                }
-                Err(RelayTokenIssueError::Other(err)) => Err(err),
-            }
-        }
-    }
-}
-
-async fn register_client_identity(
-    http_client: &reqwest::Client,
-    control_plane_uri: &str,
-    noise_private_key: &[u8; 32],
-    noise_public_key: &str,
-    cp_noise_public_key: &str,
-    client_type: ClientType,
-) -> Result<()> {
-    let endpoint = format!("{control_plane_uri}/clients");
-    let proof_payload = serde_json::to_vec(&ClientRegistrationProofPayload {
-        public_key: noise_public_key,
-        client_type: &client_type,
-    })
-    .context("failed to serialize client registration proof payload")?;
-    let noise_handshake =
-        create_registration_handshake(noise_private_key, cp_noise_public_key, &proof_payload)?;
-
-    let response = http_client
-        .post(&endpoint)
-        .json(&RegisterClientRequest {
-            public_key: noise_public_key.to_string(),
-            client_type,
-            noise_handshake: encode_base64(&noise_handshake),
-        })
-        .send()
-        .await
-        .with_context(|| format!("failed to register client identity: {endpoint}"))?;
-
-    if !response.status().is_success() {
-        return Err(response_error(response, "client registration request failed").await);
-    }
-
-    Ok(())
 }
 
 async fn issue_relay_token(
