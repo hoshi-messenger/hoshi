@@ -25,32 +25,32 @@ pub struct ServerState {
 
 impl ServerState {
     /// Create a new GlobalState instance
-    pub fn new(mut config: Config, process_start: Instant) -> Result<Self> {
+    pub async fn new(mut config: Config, process_start: Instant) -> Result<Self> {
         std::fs::create_dir_all(&config.dir_root)?;
-        let db = Database::new(&config)?;
-        db.init()?;
+        let db = Database::new(&config).await?;
+        db.init().await?;
 
         if config.relay_api_key.is_none() {
-            config.relay_api_key = db.get_relay_api_key()?;
+            config.relay_api_key = db.get_relay_api_key().await?;
         }
 
         if config.relay_api_key.is_none() {
             let relay_api_key = generate_relay_api_key();
-            db.set_relay_api_key(&relay_api_key)?;
+            db.set_relay_api_key(&relay_api_key).await?;
             config.relay_api_key = Some(relay_api_key);
         }
 
         if let Some(relay_api_key) = config.relay_api_key.as_deref() {
-            db.set_relay_api_key(relay_api_key)?;
+            db.set_relay_api_key(relay_api_key).await?;
         }
 
         if config.noise_static_private_key.is_none() {
-            config.noise_static_private_key = db.get_noise_static_private_key()?;
+            config.noise_static_private_key = db.get_noise_static_private_key().await?;
         }
 
         if config.noise_static_private_key.is_none() {
             let noise_private_key = generate_noise_static_private_key()?;
-            db.set_noise_static_private_key(&noise_private_key)?;
+            db.set_noise_static_private_key(&noise_private_key).await?;
             config.noise_static_private_key = Some(noise_private_key);
         }
 
@@ -60,7 +60,8 @@ impl ServerState {
             .ok_or_else(|| anyhow!("missing noise_static_private_key"))?;
         let (canonical_noise_private_key, noise_static_private_key) =
             canonicalize_base64_32(raw_noise_private_key, "noise_static_private_key")?;
-        db.set_noise_static_private_key(&canonical_noise_private_key)?;
+        db.set_noise_static_private_key(&canonical_noise_private_key)
+            .await?;
         config.noise_static_private_key = Some(canonical_noise_private_key);
 
         let noise_public_key = encode_base64(&derive_public_key(&noise_static_private_key));

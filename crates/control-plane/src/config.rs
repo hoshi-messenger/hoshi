@@ -54,23 +54,7 @@ impl Default for Config {
 
 impl Config {
     pub fn new() -> Result<Self> {
-        let dir_root = dirs::home_dir()
-            .map(|h| h.join(".hoshi"))
-            .unwrap_or_else(|| PathBuf::from("./.hoshi"));
-
-        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        let port = 2600;
-        let http_bind_address = SocketAddr::new(ip, port);
-        let db_name = "control_plane.sqlite3".to_string();
-
-        Ok(Self {
-            dir_root,
-            http_bind_address,
-            reuse_port: false,
-            db_name,
-            relay_api_key: relay_api_key_from_env(),
-            noise_static_private_key: noise_static_private_key_from_env(),
-        })
+        Ok(Self::default())
     }
 
     pub fn update_bound_addresses(mut self, http_addr: SocketAddr) -> Self {

@@ -43,12 +43,10 @@ where
 
     // Update config with actual addresses
     let config = config.update_bound_addresses(http_addr);
-    let state = ServerState::new(config, process_start).expect("State");
+    let state = ServerState::new(config, process_start)
+        .await
+        .expect("State");
 
-    // Pass state to test - it can access:
-    // - state.config.base_url for HTTP requests
-    // - state.config.ssh_public_host for SSH URLs
-    // - Any other config as needed
     run(state.clone(), http_listener, test(state)).await;
 
     std::fs::remove_dir_all(path).expect("Couldn't clean up TempDir");

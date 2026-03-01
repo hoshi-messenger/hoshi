@@ -100,7 +100,11 @@ pub async fn register_client_post(
         return error_response(StatusCode::BAD_REQUEST, "invalid registration proof");
     }
 
-    match state.db.get_client_by_public_key(&canonical_public_key) {
+    match state
+        .db
+        .get_client_by_public_key(&canonical_public_key)
+        .await
+    {
         Ok(Some(_)) => return error_response(StatusCode::CONFLICT, "client already exists"),
         Ok(None) => {}
         Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
@@ -112,7 +116,7 @@ pub async fn register_client_post(
         &canonical_public_key,
     );
 
-    if let Err(err) = state.db.insert_client(&client) {
+    if let Err(err) = state.db.insert_client(&client).await {
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
     }
 
@@ -123,7 +127,7 @@ pub async fn lookup_client_get(
     Path(guid): Path<String>,
     State(state): State<ServerState>,
 ) -> Response {
-    let (client, children) = match state.db.get_client_with_children(&guid) {
+    let (client, children) = match state.db.get_client_with_children(&guid).await {
         Ok(Some(result)) => result,
         Ok(None) => return error_response(StatusCode::NOT_FOUND, "client not found"),
         Err(err) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
@@ -138,7 +142,7 @@ pub async fn register_relay_post(
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<RegisterRelayRequest>,
 ) -> Response {
-    if let Err(err) = state.db.validate_relay_api_key(&payload.api_key) {
+    if let Err(err) = state.db.validate_relay_api_key(&payload.api_key).await {
         return error_response(StatusCode::UNAUTHORIZED, err.to_string());
     }
 

@@ -25,8 +25,8 @@ pub(crate) use utils::now;
 
 #[cfg(target_os = "linux")]
 fn systemd_integration() {
-    use std::time::Duration;
     use sd_notify::{NotifyState, notify};
+    use std::time::Duration;
     use tokio::time::interval;
 
     // Tell systemd we are ready (no-op if not under systemd)
@@ -61,9 +61,6 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
         "[{:?}] - Hoshi control plane started",
         state.process_start.elapsed()
     );
-
-    // First make sure the DB is alright
-    state.db.init().expect("Can't init DB");
 
     #[cfg(unix)]
     let terminate = async {
@@ -123,7 +120,7 @@ pub fn create_listener(addr: SocketAddr, reuse_port: bool) -> std::io::Result<Tc
     socket.listen(1024)
 }
 
-/// Create both HTTP and SSH listeners, returning listeners and their bound addresses
+/// Create HTTP listener, returning listener and their bound address
 pub fn create_listeners(config: &Config) -> std::io::Result<(TcpListener, SocketAddr)> {
     let http_listener = create_listener(config.http_bind_address, config.reuse_port)?;
     let http_addr = http_listener.local_addr()?;
@@ -145,8 +142,9 @@ pub fn run_multi_thread(config: Config, process_start: std::time::Instant) {
         // Update config with actual addresses
         let config = config.update_bound_addresses(http_addr);
 
-        let state =
-            ServerState::new(config, process_start).expect("Error creating State from Config");
+        let state = ServerState::new(config, process_start)
+            .await
+            .expect("Error creating State from Config");
 
         let kill = std::future::pending::<()>();
         run(state, http_listener, kill).await

@@ -138,8 +138,8 @@ async fn register_client_created(api: &ControlPlaneApi, req: RegisterClientReque
     res.json::<ClientEntry>().await.unwrap()
 }
 
-#[test]
-fn state_new_generates_and_persists_relay_api_key_when_missing() {
+#[tokio::test]
+async fn state_new_generates_and_persists_relay_api_key_when_missing() {
     let temp_dir = TempDir::new().expect("temp dir");
     let dir_root = temp_dir.path().to_str().expect("temp dir str");
     let mut config = Config::default()
@@ -149,7 +149,9 @@ fn state_new_generates_and_persists_relay_api_key_when_missing() {
         .expect("set_http_bind_addr");
     config.relay_api_key = None;
 
-    let state = ServerState::new(config, std::time::Instant::now()).expect("state");
+    let state = ServerState::new(config, std::time::Instant::now())
+        .await
+        .expect("state");
     let relay_api_key = state
         .config
         .relay_api_key
@@ -161,13 +163,14 @@ fn state_new_generates_and_persists_relay_api_key_when_missing() {
     let stored_api_key = state
         .db
         .get_relay_api_key()
+        .await
         .expect("db get relay api key")
         .expect("db relay api key should exist");
     assert_eq!(relay_api_key, stored_api_key);
 }
 
-#[test]
-fn state_new_uses_db_relay_api_key_when_config_is_missing() {
+#[tokio::test]
+async fn state_new_uses_db_relay_api_key_when_config_is_missing() {
     let temp_dir = TempDir::new().expect("temp dir");
     let dir_root = temp_dir.path().to_str().expect("temp dir str");
     let db_name = "relay-key.sqlite3";
@@ -179,7 +182,9 @@ fn state_new_uses_db_relay_api_key_when_config_is_missing() {
         .set_relay_api_key(configured_key)
         .set_http_bind_addr("127.0.0.1:0")
         .expect("set_http_bind_addr");
-    let first_state = ServerState::new(first_config, std::time::Instant::now()).expect("state");
+    let first_state = ServerState::new(first_config, std::time::Instant::now())
+        .await
+        .expect("state");
     drop(first_state);
 
     let mut second_config = Config::default()
@@ -189,15 +194,17 @@ fn state_new_uses_db_relay_api_key_when_config_is_missing() {
         .expect("set_http_bind_addr");
     second_config.relay_api_key = None;
 
-    let second_state = ServerState::new(second_config, std::time::Instant::now()).expect("state");
+    let second_state = ServerState::new(second_config, std::time::Instant::now())
+        .await
+        .expect("state");
     assert_eq!(
         second_state.config.relay_api_key.as_deref(),
         Some(configured_key)
     );
 }
 
-#[test]
-fn state_new_generates_and_persists_noise_static_private_key_when_missing() {
+#[tokio::test]
+async fn state_new_generates_and_persists_noise_static_private_key_when_missing() {
     let temp_dir = TempDir::new().expect("temp dir");
     let dir_root = temp_dir.path().to_str().expect("temp dir str");
     let mut config = Config::default()
@@ -207,7 +214,9 @@ fn state_new_generates_and_persists_noise_static_private_key_when_missing() {
         .expect("set_http_bind_addr");
     config.noise_static_private_key = None;
 
-    let state = ServerState::new(config, std::time::Instant::now()).expect("state");
+    let state = ServerState::new(config, std::time::Instant::now())
+        .await
+        .expect("state");
     let noise_key = state
         .config
         .noise_static_private_key
@@ -222,13 +231,14 @@ fn state_new_generates_and_persists_noise_static_private_key_when_missing() {
     let stored_noise_key = state
         .db
         .get_noise_static_private_key()
+        .await
         .expect("db get noise key")
         .expect("db noise key should exist");
     assert_eq!(noise_key, stored_noise_key);
 }
 
-#[test]
-fn state_new_uses_db_noise_static_private_key_when_config_is_missing() {
+#[tokio::test]
+async fn state_new_uses_db_noise_static_private_key_when_config_is_missing() {
     let temp_dir = TempDir::new().expect("temp dir");
     let dir_root = temp_dir.path().to_str().expect("temp dir str");
     let db_name = "noise-key.sqlite3";
@@ -240,7 +250,9 @@ fn state_new_uses_db_noise_static_private_key_when_config_is_missing() {
         .set_noise_static_private_key(&configured_key)
         .set_http_bind_addr("127.0.0.1:0")
         .expect("set_http_bind_addr");
-    let first_state = ServerState::new(first_config, std::time::Instant::now()).expect("state");
+    let first_state = ServerState::new(first_config, std::time::Instant::now())
+        .await
+        .expect("state");
     drop(first_state);
 
     let mut second_config = Config::default()
@@ -250,7 +262,9 @@ fn state_new_uses_db_noise_static_private_key_when_config_is_missing() {
         .expect("set_http_bind_addr");
     second_config.noise_static_private_key = None;
 
-    let second_state = ServerState::new(second_config, std::time::Instant::now()).expect("state");
+    let second_state = ServerState::new(second_config, std::time::Instant::now())
+        .await
+        .expect("state");
     assert_eq!(
         second_state.config.noise_static_private_key.as_deref(),
         Some(configured_key.as_str())
@@ -294,15 +308,15 @@ async fn noise_public_key_endpoint_returns_pattern_and_valid_key() {
 #[tokio::test]
 async fn basic_config_db_tests() {
     with_backend(|state| async move {
-        let val = state.db.get_config("test").unwrap();
+        let val = state.db.get_config("test").await.unwrap();
         assert!(val.is_none(), "'test' has a value before we set it");
 
-        state.db.set_config("test", b"123").unwrap();
-        let val = state.db.get_config("test").unwrap().unwrap();
+        state.db.set_config("test", b"123").await.unwrap();
+        let val = state.db.get_config("test").await.unwrap().unwrap();
         assert_eq!(val, b"123");
 
-        state.db.set_config("test", b"").unwrap();
-        let val = state.db.get_config("test").unwrap().unwrap();
+        state.db.set_config("test", b"").await.unwrap();
+        let val = state.db.get_config("test").await.unwrap().unwrap();
         assert_eq!(val, b"");
 
         let mut vec: Vec<u8> = Vec::new();
@@ -310,8 +324,8 @@ async fn basic_config_db_tests() {
             let v = i as u8;
             vec.push(v);
         }
-        state.db.set_config("test", &vec).unwrap();
-        let val = state.db.get_config("test").unwrap().unwrap();
+        state.db.set_config("test", &vec).await.unwrap();
+        let val = state.db.get_config("test").await.unwrap().unwrap();
         assert_eq!(val, vec);
     })
     .await;
