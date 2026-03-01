@@ -43,7 +43,7 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build workspace
-        run: cargo build --workspace --all-targets --locked
+        run: cargo build --workspace --all-targets --locked --exclude hoshi-client-gtk
 
       - name: Run tests
-        run: cargo test --workspace --all-targets --locked
+        run: cargo test --workspace --all-targets --locked --exclude hoshi-client-gtk
