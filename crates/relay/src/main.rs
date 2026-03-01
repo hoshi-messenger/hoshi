@@ -1,8 +1,8 @@
-use anyhow::Result;
+use hoshi_relay::{Config, run_multi_thread};
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    println!("Hoshi relay starting...");
+fn main() {
+    let start = std::time::Instant::now();
+    let config = Config::new().expect("error creating relay config");
 
-    Ok(())
+    run_multi_thread(config, start);
 }
