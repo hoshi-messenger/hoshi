@@ -34,7 +34,16 @@ pub(super) async fn relay_socket_loop(
 
     let mut noise_transport =
         match accept_responder_handshake(state.noise_static_private_key(), &handshake_message) {
-            Ok(transport) => transport,
+            Ok((transport, response_message)) => {
+                if socket
+                    .send(Message::Binary(response_message.into()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                transport
+            }
             Err(_) => {
                 let _ = socket.send(Message::Close(None)).await;
                 return;

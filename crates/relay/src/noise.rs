@@ -3,10 +3,17 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
 
-pub const NOISE_PATTERN: &str = "Noise_X_25519_ChaChaPoly_BLAKE2s";
+pub const REGISTRATION_NOISE_PATTERN: &str = "Noise_X_25519_ChaChaPoly_BLAKE2s";
+pub const RELAY_SESSION_NOISE_PATTERN: &str = "Noise_NK_25519_ChaChaPoly_BLAKE2s";
 
-pub fn parse_noise_params() -> Result<snow::params::NoiseParams> {
-    NOISE_PATTERN
+pub fn parse_registration_noise_params() -> Result<snow::params::NoiseParams> {
+    REGISTRATION_NOISE_PATTERN
+        .parse()
+        .map_err(|err| anyhow!("invalid noise pattern: {err}"))
+}
+
+pub fn parse_relay_session_noise_params() -> Result<snow::params::NoiseParams> {
+    RELAY_SESSION_NOISE_PATTERN
         .parse()
         .map_err(|err| anyhow!("invalid noise pattern: {err}"))
 }
@@ -47,7 +54,7 @@ pub fn create_initiator_handshake(
     payload: &[u8],
 ) -> Result<Vec<u8>> {
     let remote_public_key = decode_base64_32(remote_public_key_b64, "public_key")?;
-    let mut initiator = snow::Builder::new(parse_noise_params()?)
+    let mut initiator = snow::Builder::new(parse_registration_noise_params()?)
         .local_private_key(local_private_key)
         .remote_public_key(&remote_public_key)
         .build_initiator()
@@ -63,8 +70,8 @@ pub fn create_initiator_handshake(
 pub fn accept_responder_handshake(
     local_private_key: &[u8; 32],
     message: &[u8],
-) -> Result<snow::TransportState> {
-    let mut responder = snow::Builder::new(parse_noise_params()?)
+) -> Result<(snow::TransportState, Vec<u8>)> {
+    let mut responder = snow::Builder::new(parse_relay_session_noise_params()?)
         .local_private_key(local_private_key)
         .build_responder()
         .map_err(|_| anyhow!("failed to build noise responder"))?;
@@ -74,11 +81,17 @@ pub fn accept_responder_handshake(
         .read_message(message, &mut payload)
         .map_err(|_| anyhow!("invalid noise handshake"))?;
 
+    let mut response = vec![0_u8; 256];
+    let response_len = responder
+        .write_message(&[], &mut response)
+        .map_err(|_| anyhow!("invalid noise handshake"))?;
+
     if !responder.is_handshake_finished() {
         return Err(anyhow!("invalid noise handshake"));
     }
 
-    responder
+    let transport = responder
         .into_transport_mode()
-        .map_err(|_| anyhow!("failed to switch noise transport mode"))
+        .map_err(|_| anyhow!("failed to switch noise transport mode"))?;
+    Ok((transport, response[..response_len].to_vec()))
 }
