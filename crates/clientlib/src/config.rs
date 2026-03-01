@@ -343,8 +343,8 @@ fn default_control_plane_uri() -> String {
 fn now() -> i64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system time before unix epoch");
-    i64::try_from(duration.as_secs()).expect("timestamp overflow")
+        .unwrap_or_default();
+    i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
 }
 
 fn canonicalize_guid(guid: &str) -> Result<String> {

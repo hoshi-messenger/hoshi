@@ -146,10 +146,10 @@ impl ClientManager {
         let mut first_error: Option<anyhow::Error> = None;
 
         for connection in self.connections.iter_mut() {
-            if let Err(err) = connection.close().await {
-                if first_error.is_none() {
-                    first_error = Some(err);
-                }
+            if let Err(err) = connection.close().await
+                && first_error.is_none()
+            {
+                first_error = Some(err);
             }
         }
 
@@ -174,7 +174,8 @@ impl ClientManager {
         let control_plane_uri = control_plane_uri.trim_end_matches('/').to_string();
 
         let cp_noise = fetch_control_plane_noise_key(&self.http_client, &control_plane_uri).await?;
-        let relay = select_relay(&self.http_client, &control_plane_uri).await?;
+        let mut relays = list_relays(&self.http_client, &control_plane_uri).await?;
+        shuffle_relays(&mut relays);
 
         let local_public_key = encode_base64(&derive_public_key(&local_private_key));
         let token = match issue_relay_token(
@@ -207,14 +208,34 @@ impl ClientManager {
             ensure_token_identity_type(&token, expected_client_type)?;
         }
 
-        let connection = connect_authenticated_identity(
-            self.http_client.clone(),
-            &control_plane_uri,
-            &relay,
-            local_private_key,
-            &token,
-        )
-        .await?;
+        let mut connect_errors = Vec::new();
+        let mut connected: Option<ClientConnection> = None;
+
+        for relay in relays {
+            match connect_authenticated_identity(
+                self.http_client.clone(),
+                &control_plane_uri,
+                &relay,
+                local_private_key,
+                &token,
+            )
+            .await
+            {
+                Ok(connection) => {
+                    connected = Some(connection);
+                    break;
+                }
+                Err(err) => connect_errors.push(format!("{}:{} ({err})", relay.ip, relay.port)),
+            }
+        }
+
+        let connection = match connected {
+            Some(connection) => connection,
+            None => bail!(
+                "failed to connect to any relay: {}",
+                connect_errors.join("; ")
+            ),
+        };
 
         self.db
             .upsert_key(&guid, token.client_type.clone(), private_key_b64)
@@ -467,12 +488,11 @@ async fn issue_relay_token(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        if status == StatusCode::UNAUTHORIZED {
-            if let Ok(parsed) = serde_json::from_str::<ErrorResponse>(&body) {
-                if parsed.error == "unknown client" {
-                    return Err(RelayTokenIssueError::UnknownClient);
-                }
-            }
+        if status == StatusCode::UNAUTHORIZED
+            && let Ok(parsed) = serde_json::from_str::<ErrorResponse>(&body)
+            && parsed.error == "unknown client"
+        {
+            return Err(RelayTokenIssueError::UnknownClient);
         }
 
         if let Ok(parsed) = serde_json::from_str::<ErrorResponse>(&body) {
@@ -498,10 +518,10 @@ async fn issue_relay_token(
         .map_err(RelayTokenIssueError::Other)
 }
 
-async fn select_relay(
+async fn list_relays(
     http_client: &reqwest::Client,
     control_plane_uri: &str,
-) -> Result<RelayEntry> {
+) -> Result<Vec<RelayEntry>> {
     let endpoint = format!("{control_plane_uri}/relays");
     let response = http_client
         .get(&endpoint)
@@ -520,8 +540,14 @@ async fn select_relay(
         bail!("relay registry is empty");
     }
 
-    let relay_index = (OsRng.next_u64() as usize) % relays.len();
-    Ok(relays[relay_index].clone())
+    Ok(relays)
+}
+
+fn shuffle_relays(relays: &mut [RelayEntry]) {
+    for i in (1..relays.len()).rev() {
+        let j = (OsRng.next_u64() as usize) % (i + 1);
+        relays.swap(i, j);
+    }
 }
 
 async fn connect_relay(

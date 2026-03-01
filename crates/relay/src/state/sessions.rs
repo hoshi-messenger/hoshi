@@ -83,16 +83,16 @@ impl ServerState {
             }
         }
 
-        if !stale_session_ids.is_empty() {
-            if let Some(sessions_for_guid) = self.guid_sessions.get(recipient) {
-                for session_id in stale_session_ids {
-                    sessions_for_guid.remove(&session_id);
-                }
-                let should_drop_guid = sessions_for_guid.is_empty();
-                drop(sessions_for_guid);
-                if should_drop_guid {
-                    self.guid_sessions.remove(recipient);
-                }
+        if !stale_session_ids.is_empty()
+            && let Some(sessions_for_guid) = self.guid_sessions.get(recipient)
+        {
+            for session_id in stale_session_ids {
+                sessions_for_guid.remove(&session_id);
+            }
+            let should_drop_guid = sessions_for_guid.is_empty();
+            drop(sessions_for_guid);
+            if should_drop_guid {
+                self.guid_sessions.remove(recipient);
             }
         }
 

@@ -62,8 +62,8 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn new() -> Result<Self> {
-        Ok(Self::default())
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn update_bound_addresses(mut self, http_addr: SocketAddr) -> Self {

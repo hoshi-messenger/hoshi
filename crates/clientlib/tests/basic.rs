@@ -5,10 +5,11 @@ use std::time::Duration;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use common::with_control_plane_and_relay;
 use hoshi_clientlib::{ClientConnection, ClientDatabase, ClientManager};
+use hoshi_control_plane::RelayPresence;
 use hoshi_protocol::{
     control_plane::{
         ClientEntry as Client, ClientRegistrationProofPayload, ClientType, NoisePublicKeyResponse,
-        RegisterClientRequest,
+        RegisterClientRequest, RelayEntry,
     },
     noise::{
         create_registration_handshake, derive_public_key, encode_base64,
@@ -21,6 +22,33 @@ use uuid::Uuid;
 
 const MESSAGE_TIMEOUT: Duration = Duration::from_secs(2);
 const NO_MESSAGE_TIMEOUT: Duration = Duration::from_millis(250);
+
+async fn wait_for_relay_registration(
+    client: &reqwest::Client,
+    control_plane_uri: &str,
+    relay_guid: &str,
+) {
+    for _ in 0..30 {
+        let response = client
+            .get(format!("{}/relays", control_plane_uri))
+            .send()
+            .await
+            .expect("relay registry response");
+        if response.status() == StatusCode::OK {
+            let relays = response
+                .json::<Vec<RelayEntry>>()
+                .await
+                .expect("relay registry payload");
+            if relays.iter().any(|relay| relay.guid == relay_guid) {
+                return;
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    panic!("timed out waiting for relay registration");
+}
 
 #[tokio::test]
 async fn database_open_creates_file_and_default_control_plane_uri() {
@@ -166,6 +194,67 @@ async fn connect_from_store_succeeds_for_registered_device() {
                 .expect("device connection")
                 .client_type(),
             ClientType::Device
+        );
+
+        manager.close_all().await.expect("close manager");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn connect_from_store_falls_back_across_multiple_relays() {
+    with_control_plane_and_relay(|control_plane, relay| async move {
+        let cp_uri = control_plane.config.uri();
+        let http = reqwest::Client::new();
+
+        wait_for_relay_registration(&http, &cp_uri, &relay.config.guid).await;
+
+        let dead_relay_guid = Uuid::now_v7().to_string();
+        control_plane.relays.insert(
+            dead_relay_guid.clone(),
+            RelayPresence {
+                entry: RelayEntry {
+                    guid: dead_relay_guid,
+                    public_key: relay.noise_public_key().to_string(),
+                    ip: "127.0.0.1".to_string(),
+                    port: 1,
+                },
+                last_seen: i64::MAX,
+            },
+        );
+
+        let (public_key, private_key) = generate_noise_keypair();
+        let registered = register_client(
+            &http,
+            &cp_uri,
+            &public_key,
+            &private_key,
+            ClientType::Device,
+        )
+        .await;
+
+        let (_db_dir, db) = create_test_database().await;
+        db.set_control_plane_uri(&cp_uri)
+            .await
+            .expect("set control-plane uri");
+        db.upsert_key(
+            &registered.id,
+            ClientType::Device,
+            &STANDARD.encode(private_key),
+        )
+        .await
+        .expect("store device key");
+
+        let mut manager = ClientManager::new(db).await.expect("create manager");
+        let index = manager
+            .connect_from_store(&registered.id, ClientType::Device)
+            .await
+            .expect("connect should fallback to healthy relay");
+
+        assert_eq!(manager.connections().len(), 1);
+        assert_eq!(
+            manager.connection(index).expect("device connection").guid(),
+            registered.id
         );
 
         manager.close_all().await.expect("close manager");
@@ -440,7 +529,9 @@ async fn same_manager_same_guid_two_connections_fan_out_message() {
         assert_eq!(sender_received.payload, b"same-guid-fanout");
 
         let duplicate_received = receive_message_with_timeout(
-            manager.connection_mut(duplicate).expect("duplicate connection"),
+            manager
+                .connection_mut(duplicate)
+                .expect("duplicate connection"),
             MESSAGE_TIMEOUT,
         )
         .await;
@@ -453,7 +544,9 @@ async fn same_manager_same_guid_two_connections_fan_out_message() {
         )
         .await;
         assert_no_message_within(
-            manager.connection_mut(duplicate).expect("duplicate connection"),
+            manager
+                .connection_mut(duplicate)
+                .expect("duplicate connection"),
             NO_MESSAGE_TIMEOUT,
         )
         .await;
@@ -769,6 +862,9 @@ async fn assert_no_message_within(connection: &mut ClientConnection, timeout: Du
             "expected no message within {:?}, got recipient={} payload={:?}",
             timeout, message.recipient, message.payload
         ),
-        Ok(Err(err)) => panic!("expected no message within {:?}, got error: {err:#}", timeout),
+        Ok(Err(err)) => panic!(
+            "expected no message within {:?}, got error: {err:#}",
+            timeout
+        ),
     }
 }

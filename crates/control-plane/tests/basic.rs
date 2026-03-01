@@ -1,6 +1,6 @@
 mod common;
 
-use std::future::Future;
+use std::{future::Future, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use common::{
@@ -8,7 +8,7 @@ use common::{
     IssueRelayTokenResponse, LookupClientResponse, NoisePublicKeyResponse, RegisterClientRequest,
     RegisterRelayRequest, RelayEntry, RelayJwtPublicKeyResponse, with_control_plane,
 };
-use hoshi_control_plane::{Config, ServerState};
+use hoshi_control_plane::{Config, RelayPresence, ServerState};
 use hoshi_protocol::{
     control_plane::{
         ClientRegistrationProofPayload, RelayRegistrationProofPayload, RelayTokenProofPayload,
@@ -817,6 +817,104 @@ async fn issue_relay_token_returns_signed_claims_for_single_identity() {
         assert_eq!(token.claims.sub, device.id);
         assert_eq!(token.claims.client_type, ClientType::Device);
         assert!(token.claims.exp > token.claims.iat);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn issue_relay_token_updates_client_last_seen() {
+    with_control_plane_api(|state, api| async move {
+        let (device_public, device_private) = generate_noise_keypair();
+        let device = register_client_created(
+            &api,
+            client_request(&api, &device_public, &device_private, ClientType::Device).await,
+        )
+        .await;
+
+        let before = state
+            .db
+            .get_client(&device.id)
+            .await
+            .expect("lookup registered client before token")
+            .expect("registered client exists")
+            .last_seen;
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let token_res = api
+            .issue_relay_token(&relay_token_request(&api, &device_public, &device_private).await)
+            .await
+            .unwrap();
+        assert_eq!(token_res.status(), StatusCode::OK);
+
+        let after = state
+            .db
+            .get_client(&device.id)
+            .await
+            .expect("lookup registered client after token")
+            .expect("registered client exists")
+            .last_seen;
+
+        assert!(
+            after > before,
+            "expected last_seen to increase, before={before}, after={after}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn list_relays_filters_stale_entries() {
+    with_control_plane_api(|state, api| async move {
+        let relay_api_key = state
+            .config
+            .relay_api_key
+            .clone()
+            .expect("relay_api_key should be set");
+
+        let live_guid = "44444444-4444-4444-4444-444444444444";
+        let stale_guid = "55555555-5555-5555-5555-555555555555";
+
+        let (live_public, live_private) = generate_noise_keypair();
+        let res = api
+            .register_relay(
+                &relay_request(
+                    &api,
+                    live_guid,
+                    &live_public,
+                    &live_private,
+                    &relay_api_key,
+                    4700,
+                )
+                .await,
+            )
+            .await
+            .unwrap();
+        assert!(res.status().is_success());
+
+        state.relays.insert(
+            stale_guid.to_string(),
+            RelayPresence {
+                entry: RelayEntry {
+                    guid: stale_guid.to_string(),
+                    public_key: "stale-key".to_string(),
+                    ip: "127.0.0.1".to_string(),
+                    port: 4701,
+                },
+                last_seen: 0,
+            },
+        );
+
+        let list_res = api.list_relays().await.unwrap();
+        assert_eq!(list_res.status(), StatusCode::OK);
+
+        let relays = list_res.json::<Vec<RelayEntry>>().await.unwrap();
+        assert_eq!(relays.len(), 1);
+        assert_eq!(relays[0].guid, live_guid);
+        assert!(
+            state.relays.get(stale_guid).is_none(),
+            "stale relay should be pruned after listing"
+        );
     })
     .await;
 }

@@ -3,10 +3,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::response::Html;
 
 pub fn now() -> i64 {
-    SystemTime::now()
+    let seconds_since_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
+        .unwrap_or_default()
+        .as_secs();
+
+    i64::try_from(seconds_since_epoch).unwrap_or(i64::MAX)
 }
 
 pub fn response_html(body: &str, title: &str) -> Html<String> {

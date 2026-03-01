@@ -70,6 +70,10 @@ pub(crate) async fn issue_relay_token_post(
         );
     }
 
+    if let Err(err) = state.db.touch_client(&guid).await {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+    }
+
     let issued_at = now();
     let expires_at = issued_at + 86_400;
     let claims = RelayTokenClaims {

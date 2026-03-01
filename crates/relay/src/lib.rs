@@ -6,11 +6,9 @@ mod state;
 use std::{future::Future, net::SocketAddr};
 
 pub use config::Config;
+use hoshi_server_util::{create_http_listener, create_listener as create_tcp_listener};
 pub use state::ServerState;
-use tokio::{
-    net::{TcpListener, TcpSocket},
-    runtime::Builder,
-};
+use tokio::{net::TcpListener, runtime::Builder};
 
 pub(crate) use routes::*;
 
@@ -77,27 +75,11 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
 }
 
 pub fn create_listener(addr: SocketAddr, reuse_port: bool) -> std::io::Result<TcpListener> {
-    let socket = if addr.is_ipv4() {
-        TcpSocket::new_v4()?
-    } else {
-        TcpSocket::new_v6()?
-    };
-
-    socket.set_reuseaddr(true)?;
-
-    #[cfg(target_os = "linux")]
-    socket.set_reuseport(reuse_port)?;
-    #[cfg(not(target_os = "linux"))]
-    let _ = reuse_port;
-
-    socket.bind(addr)?;
-    socket.listen(1024)
+    create_tcp_listener(addr, reuse_port)
 }
 
 pub fn create_listeners(config: &Config) -> std::io::Result<(TcpListener, SocketAddr)> {
-    let http_listener = create_listener(config.http_bind_address, config.reuse_port)?;
-    let http_addr = http_listener.local_addr()?;
-    Ok((http_listener, http_addr))
+    create_http_listener(config.http_bind_address, config.reuse_port)
 }
 
 pub fn run_multi_thread(config: Config, process_start: std::time::Instant) {

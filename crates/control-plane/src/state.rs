@@ -13,12 +13,18 @@ use rand_core::{OsRng, RngCore};
 
 use crate::{Config, database::Database};
 
+#[derive(Debug, Clone)]
+pub struct RelayPresence {
+    pub entry: RelayEntry,
+    pub last_seen: i64,
+}
+
 #[derive(Clone)]
 pub struct ServerState {
     pub process_start: Instant,
     pub config: Arc<Config>,
     pub db: Database,
-    pub relays: Arc<DashMap<String, RelayEntry>>,
+    pub relays: Arc<DashMap<String, RelayPresence>>,
     noise_static_private_key: Arc<[u8; 32]>,
     noise_public_key: Arc<String>,
     relay_jwt_encoding_key: Arc<EncodingKey>,

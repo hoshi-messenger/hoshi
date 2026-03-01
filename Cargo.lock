@@ -619,6 +619,7 @@ dependencies = [
  "hoshi-control-plane",
  "hoshi-protocol",
  "hoshi-relay",
+ "hoshi-test-support",
  "rand_core 0.6.4",
  "reqwest",
  "serde",
@@ -643,10 +644,10 @@ dependencies = [
  "dirs",
  "ed25519-dalek",
  "hoshi-protocol",
+ "hoshi-server-util",
  "jsonwebtoken",
  "rand_core 0.6.4",
  "reqwest",
- "sd-notify",
  "serde",
  "serde_json",
  "snow",
@@ -664,6 +665,7 @@ dependencies = [
  "hoshi-control-plane",
  "hoshi-protocol",
  "hoshi-relay",
+ "hoshi-test-support",
  "reqwest",
  "tempfile",
  "tokio",
@@ -692,6 +694,7 @@ dependencies = [
  "dirs",
  "ed25519-dalek",
  "hoshi-protocol",
+ "hoshi-server-util",
  "jsonwebtoken",
  "rand_core 0.6.4",
  "reqwest",
@@ -703,6 +706,23 @@ dependencies = [
  "toml",
  "uuid",
  "x25519-dalek",
+]
+
+[[package]]
+name = "hoshi-server-util"
+version = "0.1.0"
+dependencies = [
+ "sd-notify",
+ "tokio",
+]
+
+[[package]]
+name = "hoshi-test-support"
+version = "0.1.0"
+dependencies = [
+ "hoshi-control-plane",
+ "hoshi-relay",
+ "tempfile",
 ]
 
 [[package]]

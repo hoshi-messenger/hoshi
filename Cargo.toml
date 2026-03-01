@@ -5,6 +5,8 @@ members = [
     "crates/clientlib",
     "crates/protocol",
     "crates/integration-tests",
+    "crates/server-util",
+    "crates/test-support",
 ]
 resolver = "2"
 
@@ -37,3 +39,4 @@ toml = "0.8"
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 hoshi-protocol = { path = "crates/protocol" }
+hoshi-server-util = { path = "crates/server-util" }

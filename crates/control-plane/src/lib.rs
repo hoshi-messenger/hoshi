@@ -11,47 +11,15 @@ use std::net::SocketAddr;
 pub use client::{Client, ClientType};
 pub use config::Config;
 pub use database::Database;
+use hoshi_server_util::{
+    create_http_listener, create_listener as create_tcp_listener,
+    systemd_notify_ready_with_watchdog,
+};
 pub(crate) use routes::*;
 
-pub use state::ServerState;
-use tokio::{
-    net::{TcpListener, TcpSocket},
-    runtime::Builder,
-};
+pub use state::{RelayPresence, ServerState};
+use tokio::{net::TcpListener, runtime::Builder};
 pub(crate) use utils::now;
-
-#[cfg(target_os = "linux")]
-fn systemd_integration() {
-    use sd_notify::{NotifyState, notify};
-    use std::time::Duration;
-    use tokio::time::interval;
-
-    // Tell systemd we are ready (no-op if not under systemd)
-    let _ = notify(false, &[NotifyState::Ready]);
-
-    // WATCHDOG_USEC is only set if watchdog is enabled *and* systemd manages us
-    let watchdog_usec = match std::env::var("WATCHDOG_USEC") {
-        Ok(v) => v.parse::<u64>().ok(),
-        Err(_) => None,
-    };
-
-    let watchdog_usec = match watchdog_usec {
-        Some(v) if v > 0 => v,
-        _ => return, // no watchdog → nothing to do
-    };
-
-    // systemd recommends pinging at least every WatchdogSec / 2
-    let interval_duration = Duration::from_micros(watchdog_usec / 2);
-
-    tokio::spawn(async move {
-        let mut ticker = interval(interval_duration);
-
-        loop {
-            ticker.tick().await;
-            let _ = notify(false, &[NotifyState::Watchdog]);
-        }
-    });
-}
 
 pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill: T) {
     println!(
@@ -79,8 +47,7 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
         state.process_start.elapsed()
     );
 
-    #[cfg(target_os = "linux")]
-    systemd_integration();
+    systemd_notify_ready_with_watchdog();
 
     tokio::select! {
         http_res = http_server => {
@@ -100,29 +67,12 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
 
 /// Create and bind a TCP listener with appropriate socket options
 pub fn create_listener(addr: SocketAddr, reuse_port: bool) -> std::io::Result<TcpListener> {
-    let socket = if addr.is_ipv4() {
-        TcpSocket::new_v4()?
-    } else {
-        TcpSocket::new_v6()?
-    };
-
-    socket.set_reuseaddr(true)?;
-
-    #[cfg(target_os = "linux")]
-    socket.set_reuseport(reuse_port)?;
-    #[cfg(not(target_os = "linux"))]
-    let _ = reuse_port;
-
-    socket.bind(addr)?;
-    socket.listen(1024)
+    create_tcp_listener(addr, reuse_port)
 }
 
 /// Create HTTP listener, returning listener and their bound address
 pub fn create_listeners(config: &Config) -> std::io::Result<(TcpListener, SocketAddr)> {
-    let http_listener = create_listener(config.http_bind_address, config.reuse_port)?;
-    let http_addr = http_listener.local_addr()?;
-
-    Ok((http_listener, http_addr))
+    create_http_listener(config.http_bind_address, config.reuse_port)
 }
 
 pub fn run_multi_thread(config: Config, process_start: std::time::Instant) {

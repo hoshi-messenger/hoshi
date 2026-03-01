@@ -13,3 +13,4 @@ tempfile = { workspace = true }
 hoshi-control-plane = { path = "../control-plane" }
 hoshi-relay = { path = "../relay" }
 hoshi-protocol = { workspace = true }
+hoshi-test-support = { path = "../test-support" }

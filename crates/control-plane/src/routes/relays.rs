@@ -10,9 +10,11 @@ use hoshi_protocol::control_plane::{
     RegisterRelayRequest, RelayEntry, RelayRegistrationProofPayload,
 };
 
-use crate::ServerState;
+use crate::{RelayPresence, ServerState, now};
 
 use super::common::{error_response, serialize_payload, verify_noise_proof};
+
+const RELAY_TTL_SECONDS: i64 = 90;
 
 pub(crate) async fn register_relay_post(
     State(state): State<ServerState>,
@@ -55,8 +57,12 @@ pub(crate) async fn register_relay_post(
         ip: peer_addr.ip().to_string(),
         port: payload.port,
     };
+    let relay_presence = RelayPresence {
+        entry: relay.clone(),
+        last_seen: now(),
+    };
 
-    let already_exists = state.relays.insert(guid, relay.clone()).is_some();
+    let already_exists = state.relays.insert(guid, relay_presence).is_some();
     let status = if already_exists {
         StatusCode::OK
     } else {
@@ -67,11 +73,23 @@ pub(crate) async fn register_relay_post(
 }
 
 pub(crate) async fn list_relays_get(State(state): State<ServerState>) -> Response {
-    let mut relays: Vec<RelayEntry> = state
-        .relays
-        .iter()
-        .map(|entry| entry.value().clone())
-        .collect();
+    let now_ts = now();
+    let mut stale_guids = Vec::new();
+    let mut relays: Vec<RelayEntry> = Vec::new();
+
+    for relay in state.relays.iter() {
+        let relay_age = now_ts.saturating_sub(relay.value().last_seen);
+        if relay_age > RELAY_TTL_SECONDS {
+            stale_guids.push(relay.key().clone());
+            continue;
+        }
+        relays.push(relay.value().entry.clone());
+    }
+
+    for guid in stale_guids {
+        state.relays.remove(&guid);
+    }
+
     relays.sort_by(|a, b| a.guid.cmp(&b.guid));
 
     (StatusCode::OK, Json(relays)).into_response()
