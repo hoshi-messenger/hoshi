@@ -14,6 +14,7 @@ pub struct Config {
     pub db_name: String,
     pub relay_api_key: Option<String>,
     pub noise_static_private_key: Option<String>,
+    pub relay_jwt_signing_private_key: Option<String>,
 }
 
 fn relay_api_key_from_env() -> Option<String> {
@@ -25,6 +26,13 @@ fn relay_api_key_from_env() -> Option<String> {
 
 fn noise_static_private_key_from_env() -> Option<String> {
     env::var("HOSHI_NOISE_STATIC_PRIVATE_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn relay_jwt_signing_private_key_from_env() -> Option<String> {
+    env::var("HOSHI_RELAY_JWT_SIGNING_PRIVATE_KEY")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -48,6 +56,7 @@ impl Default for Config {
             db_name,
             relay_api_key: relay_api_key_from_env(),
             noise_static_private_key: noise_static_private_key_from_env(),
+            relay_jwt_signing_private_key: relay_jwt_signing_private_key_from_env(),
         }
     }
 }
@@ -75,7 +84,7 @@ impl Config {
     }
 
     pub fn uri(&self) -> String {
-        format!("http://{}", self.http_bind_address.to_string())
+        format!("http://{}", self.http_bind_address)
     }
 
     pub fn set_db_name(mut self, db_name: &str) -> Self {
@@ -90,6 +99,14 @@ impl Config {
 
     pub fn set_noise_static_private_key(mut self, noise_static_private_key: &str) -> Self {
         self.noise_static_private_key = Some(noise_static_private_key.to_string());
+        self
+    }
+
+    pub fn set_relay_jwt_signing_private_key(
+        mut self,
+        relay_jwt_signing_private_key: &str,
+    ) -> Self {
+        self.relay_jwt_signing_private_key = Some(relay_jwt_signing_private_key.to_string());
         self
     }
 }

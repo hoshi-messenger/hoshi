@@ -25,6 +25,8 @@ struct ClientRow {
 impl Database {
     pub const RELAY_API_KEY_CONFIG_KEY: &'static str = "relay_api_key";
     pub const NOISE_STATIC_PRIVATE_KEY_CONFIG_KEY: &'static str = "noise_static_private_key";
+    pub const RELAY_JWT_SIGNING_PRIVATE_KEY_CONFIG_KEY: &'static str =
+        "relay_jwt_signing_private_key";
 
     pub async fn new(config: &Config) -> Result<Self> {
         let conn = if config.db_name == ":memory:" {
@@ -79,7 +81,7 @@ impl Database {
             .call(move |conn| -> rusqlite::Result<Option<Vec<u8>>> {
                 let mut stmt = conn.prepare("SELECT value FROM config WHERE key = ?1")?;
                 let mut rows = stmt.query([key])?;
-                Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
+                rows.next()?.map(|row| row.get(0)).transpose()
             })
             .await?;
         Ok(value)
@@ -112,40 +114,47 @@ impl Database {
         Err(anyhow!("invalid api key"))
     }
 
-    pub async fn get_relay_api_key(&self) -> Result<Option<String>> {
-        let Some(raw_value) = self.get_config(Self::RELAY_API_KEY_CONFIG_KEY).await? else {
+    async fn get_config_string(&self, key: &str) -> Result<Option<String>> {
+        let Some(raw_value) = self.get_config(key).await? else {
             return Ok(None);
         };
 
-        let value = String::from_utf8(raw_value)
-            .map_err(|_| anyhow!("Invalid UTF-8 value for relay_api_key"))?;
+        let value =
+            String::from_utf8(raw_value).map_err(|_| anyhow!("Invalid UTF-8 value for {key}"))?;
         Ok(Some(value))
     }
 
+    async fn set_config_string(&self, key: &str, value: &str) -> Result<()> {
+        self.set_config(key, value.as_bytes()).await
+    }
+
+    pub async fn get_relay_api_key(&self) -> Result<Option<String>> {
+        self.get_config_string(Self::RELAY_API_KEY_CONFIG_KEY).await
+    }
+
     pub async fn set_relay_api_key(&self, api_key: &str) -> Result<()> {
-        self.set_config(Self::RELAY_API_KEY_CONFIG_KEY, api_key.as_bytes())
+        self.set_config_string(Self::RELAY_API_KEY_CONFIG_KEY, api_key)
             .await
     }
 
     pub async fn get_noise_static_private_key(&self) -> Result<Option<String>> {
-        let Some(raw_value) = self
-            .get_config(Self::NOISE_STATIC_PRIVATE_KEY_CONFIG_KEY)
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        let value = String::from_utf8(raw_value)
-            .map_err(|_| anyhow!("Invalid UTF-8 value for noise_static_private_key"))?;
-        Ok(Some(value))
+        self.get_config_string(Self::NOISE_STATIC_PRIVATE_KEY_CONFIG_KEY)
+            .await
     }
 
     pub async fn set_noise_static_private_key(&self, private_key: &str) -> Result<()> {
-        self.set_config(
-            Self::NOISE_STATIC_PRIVATE_KEY_CONFIG_KEY,
-            private_key.as_bytes(),
-        )
-        .await
+        self.set_config_string(Self::NOISE_STATIC_PRIVATE_KEY_CONFIG_KEY, private_key)
+            .await
+    }
+
+    pub async fn get_relay_jwt_signing_private_key(&self) -> Result<Option<String>> {
+        self.get_config_string(Self::RELAY_JWT_SIGNING_PRIVATE_KEY_CONFIG_KEY)
+            .await
+    }
+
+    pub async fn set_relay_jwt_signing_private_key(&self, private_key: &str) -> Result<()> {
+        self.set_config_string(Self::RELAY_JWT_SIGNING_PRIVATE_KEY_CONFIG_KEY, private_key)
+            .await
     }
 
     // Clients

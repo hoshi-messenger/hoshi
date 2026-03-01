@@ -4,14 +4,15 @@ use std::future::Future;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use common::{
-    ClientEntry, ClientType, ControlPlaneApi, ErrorResponse, LookupClientResponse,
-    NoisePublicKeyResponse, RegisterClientRequest, RegisterRelayRequest, RelayEntry,
-    with_control_plane,
+    ClientEntry, ClientType, ControlPlaneApi, ErrorResponse, IssueRelayTokenRequest,
+    IssueRelayTokenResponse, LookupClientResponse, NoisePublicKeyResponse, RegisterClientRequest,
+    RegisterRelayRequest, RelayEntry, RelayJwtPublicKeyResponse, with_control_plane,
 };
 use hoshi_control_plane::{Config, ServerState};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use reqwest::Client;
 use reqwest::StatusCode;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
 const NOISE_PATTERN: &str = "Noise_X_25519_ChaChaPoly_BLAKE2s";
@@ -29,6 +30,20 @@ struct RelayRegistrationProofPayload<'a> {
     guid: &'a str,
     api_key: &'a str,
     port: u16,
+}
+
+#[derive(Serialize)]
+struct RelayTokenProofPayload<'a> {
+    public_key: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelayTokenClaims {
+    sub: String,
+    exp: i64,
+    iat: i64,
+    client_guid: String,
+    device_guid: String,
 }
 
 fn generate_noise_keypair() -> (String, Vec<u8>) {
@@ -116,6 +131,23 @@ async fn relay_request(
         public_key: public_key.to_string(),
         api_key: api_key.to_string(),
         port,
+        noise_handshake,
+    }
+}
+
+async fn relay_token_request(
+    api: &ControlPlaneApi,
+    public_key: &str,
+    private_key: &[u8],
+) -> IssueRelayTokenRequest {
+    let server_noise = fetch_noise_public_key(api).await;
+    let proof_payload =
+        serde_json::to_vec(&RelayTokenProofPayload { public_key }).expect("serialize token proof");
+    let noise_handshake =
+        create_noise_handshake(private_key, &server_noise.public_key, &proof_payload);
+
+    IssueRelayTokenRequest {
+        public_key: public_key.to_string(),
         noise_handshake,
     }
 }
@@ -816,6 +848,77 @@ async fn list_relays_returns_flat_array_of_unique_entries() {
         assert_eq!(relays[1].guid, guid_two);
         assert_eq!(relays[1].public_key, public_two_v2);
         assert_eq!(relays[1].port, 4010);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn relay_jwt_public_key_endpoint_exposes_eddsa_key() {
+    with_control_plane_api(|_state, api| async move {
+        let res = api.get_relay_jwt_public_key().await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = res.json::<RelayJwtPublicKeyResponse>().await.unwrap();
+        assert_eq!(body.alg, "EdDSA");
+        assert!(!body.x.is_empty());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn issue_relay_token_returns_signed_claims_for_device_and_client() {
+    with_control_plane_api(|_state, api| async move {
+        let (parent_public, parent_private) = generate_noise_keypair();
+        let parent = register_client_created(
+            &api,
+            client_request(
+                &api,
+                &parent_public,
+                &parent_private,
+                None,
+                ClientType::User,
+            )
+            .await,
+        )
+        .await;
+
+        let (device_public, device_private) = generate_noise_keypair();
+        let device = register_client_created(
+            &api,
+            client_request(
+                &api,
+                &device_public,
+                &device_private,
+                Some(&parent.id),
+                ClientType::Device,
+            )
+            .await,
+        )
+        .await;
+
+        let token_res = api
+            .issue_relay_token(&relay_token_request(&api, &device_public, &device_private).await)
+            .await
+            .unwrap();
+        assert_eq!(token_res.status(), StatusCode::OK);
+        let token_body = token_res.json::<IssueRelayTokenResponse>().await.unwrap();
+        assert_eq!(token_body.client_guid, parent.id);
+        assert_eq!(token_body.device_guid, device.id);
+
+        let key_res = api.get_relay_jwt_public_key().await.unwrap();
+        assert_eq!(key_res.status(), StatusCode::OK);
+        let key = key_res.json::<RelayJwtPublicKeyResponse>().await.unwrap();
+
+        let token = decode::<RelayTokenClaims>(
+            &token_body.token,
+            &DecodingKey::from_ed_components(&key.x).expect("valid ed key"),
+            &Validation::new(Algorithm::EdDSA),
+        )
+        .expect("decode relay token");
+        assert_eq!(token.claims.sub, device.id);
+        assert_eq!(token.claims.device_guid, device.id);
+        assert_eq!(token.claims.client_guid, parent.id);
+        assert!(token.claims.exp > token.claims.iat);
     })
     .await;
 }

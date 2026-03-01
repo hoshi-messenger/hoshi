@@ -36,6 +36,26 @@ pub struct NoisePublicKeyResponse {
     pub public_key: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayJwtPublicKeyResponse {
+    pub alg: String,
+    pub x: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueRelayTokenRequest {
+    pub public_key: String,
+    pub noise_handshake: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueRelayTokenResponse {
+    pub token: String,
+    pub expires_at: i64,
+    pub client_guid: String,
+    pub device_guid: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RelayEntry {
     pub guid: String,

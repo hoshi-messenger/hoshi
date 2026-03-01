@@ -16,6 +16,8 @@ uuid = { workspace = true }
 x25519-dalek = { workspace = true }
 base64 = { workspace = true }
 snow = { workspace = true }
+jsonwebtoken = { workspace = true }
+ed25519-dalek = { workspace = true }
 dirs = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

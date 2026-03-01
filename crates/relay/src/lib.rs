@@ -1,6 +1,7 @@
 pub mod api;
 mod config;
 mod http;
+mod noise;
 mod routes;
 mod state;
 
@@ -53,6 +54,9 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
         .await
         .expect("couldn't start relay http server");
 
+    let jwt_refresh_task = tokio::spawn(state.clone().run_relay_jwt_key_refresh_loop());
+    let relay_registration_task = tokio::spawn(state.clone().run_relay_registration_loop());
+
     println!("[{:?}] - Hoshi relay ready", state.process_start.elapsed());
 
     tokio::select! {
@@ -69,6 +73,9 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
             eprintln!("Received Kill!");
         }
     }
+
+    jwt_refresh_task.abort();
+    relay_registration_task.abort();
 }
 
 pub fn create_listener(addr: SocketAddr, reuse_port: bool) -> std::io::Result<TcpListener> {

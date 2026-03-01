@@ -1,8 +1,9 @@
 pub use hoshi_control_plane::Client as ClientEntry;
 pub use hoshi_control_plane::ClientType;
 pub use hoshi_control_plane::api::{
-    ErrorResponse, LookupClientResponse, NoisePublicKeyResponse, RegisterClientRequest,
-    RegisterRelayRequest, RelayEntry,
+    ErrorResponse, IssueRelayTokenRequest, IssueRelayTokenResponse, LookupClientResponse,
+    NoisePublicKeyResponse, RegisterClientRequest, RegisterRelayRequest, RelayEntry,
+    RelayJwtPublicKeyResponse,
 };
 use reqwest::Client;
 
@@ -59,6 +60,24 @@ impl ControlPlaneApi {
     pub async fn get_noise_public_key(&self) -> reqwest::Result<reqwest::Response> {
         self.client
             .get(format!("{}/noise/public-key", self.base_uri))
+            .send()
+            .await
+    }
+
+    pub async fn get_relay_jwt_public_key(&self) -> reqwest::Result<reqwest::Response> {
+        self.client
+            .get(format!("{}/auth/relay-jwt-public-key", self.base_uri))
+            .send()
+            .await
+    }
+
+    pub async fn issue_relay_token(
+        &self,
+        req: &IssueRelayTokenRequest,
+    ) -> reqwest::Result<reqwest::Response> {
+        self.client
+            .post(format!("{}/auth/relay-token", self.base_uri))
+            .json(req)
             .send()
             .await
     }

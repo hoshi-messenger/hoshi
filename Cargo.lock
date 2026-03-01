@@ -62,6 +62,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
 dependencies = [
  "axum-core",
+ "base64",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -80,8 +81,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -304,6 +307,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-encoding"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -467,6 +476,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
 
 [[package]]
+name = "futures-sink"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c39754e157331b013978ec91992bde1ac089843443c49cbc7f46150b0fad0893"
+
+[[package]]
 name = "futures-task"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -479,6 +494,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
 dependencies = [
  "futures-core",
+ "futures-sink",
  "futures-task",
  "pin-project-lite",
  "slab",
@@ -589,6 +605,8 @@ dependencies = [
  "base64",
  "dashmap",
  "dirs",
+ "ed25519-dalek",
+ "jsonwebtoken",
  "rand_core 0.6.4",
  "reqwest",
  "sd-notify",
@@ -620,6 +638,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64",
+ "dashmap",
  "dirs",
  "ed25519-dalek",
  "jsonwebtoken",
@@ -627,6 +646,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "snow",
  "tempfile",
  "tokio",
  "toml",
@@ -1563,6 +1583,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1840,6 +1871,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite",
+]
+
+[[package]]
 name = "toml"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1953,6 +1996,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "tungstenite"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8628dcc84e5a09eb3d8423d6cb682965dea9133204e8fb3efee74c2a0c259442"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand",
+ "sha1",
+ "thiserror",
+ "utf-8",
+]
+
+[[package]]
 name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1997,6 +2057,12 @@ dependencies = [
  "percent-encoding",
  "serde",
 ]
+
+[[package]]
+name = "utf-8"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
 
 [[package]]
 name = "utf8_iter"

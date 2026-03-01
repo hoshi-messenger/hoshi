@@ -3,12 +3,13 @@ use std::net::SocketAddr;
 use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 
-use crate::{ServerState, healthz_get, index_get};
+use crate::{ServerState, healthz_get, index_get, relay_ws_get};
 
 pub fn router(state: ServerState) -> Router {
     Router::new()
         .route("/", get(index_get))
         .route("/healthz", get(healthz_get))
+        .route("/relay", get(relay_ws_get))
         .with_state(state)
 }
 
