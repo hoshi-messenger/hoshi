@@ -1,28 +1,34 @@
-use std::rc::Rc;
+use adw::{Application, ApplicationWindow, NavigationView, prelude::*};
 
-use adw::Application;
-use glib::ExitCode;
-use gtk::prelude::*;
-
-use crate::build_ui;
+use crate::view_contact_list;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub app: Rc<Application>,
+    pub app: Application,
+    pub nav: NavigationView,
+    pub win: ApplicationWindow,
 }
 
 impl AppState {
-    pub fn new(app: Application) -> AppState {
-        Self {
-            app: Rc::new(app)
-        }
-    }
+    pub fn start(app: Application) {
+        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
 
-    pub fn run(&self) -> ExitCode {
-        // Connect to "activate" signal of `app`
-        let state = self.clone();
-        self.app.connect_activate(move |_| build_ui(state.clone()));
+        let nav = NavigationView::builder().build();
 
-        self.app.run()
+        //build_page(&nav, "Hoshi Manager", true);
+
+        // Create a window
+        let win = ApplicationWindow::builder()
+            .application(&app)
+            .build();
+        win.set_content(Some(&nav));
+
+        let state = Self {
+            app,
+            nav,
+            win: win.clone(),
+        };
+        view_contact_list(state);
+        win.present();
     }
 }
