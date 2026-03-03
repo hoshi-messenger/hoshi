@@ -2,7 +2,8 @@
 
 use std::{future::Future, path::Path};
 
-use hoshi_relay::{Config, ServerState, create_listeners, run};
+use hoshi_relay::{Config, ServerState, run};
+use hoshi_server_util::create_http_listener;
 use tempfile::TempDir;
 
 mod api;
@@ -44,7 +45,7 @@ where
     .expect("write test relay config");
 
     let config = Config::load_from_path(&config_path).expect("load relay config");
-    let (http_listener, http_addr) = create_listeners(&config).expect("create listeners");
+    let (http_listener, http_addr) = create_http_listener(config.http_bind_address).expect("create listeners");
     let config = config.update_bound_addresses(http_addr);
     let state = ServerState::new(config, process_start)
         .await

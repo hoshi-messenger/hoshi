@@ -1,51 +1,35 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ClientType {
-    User,
-    Device,
-    Relay,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientEntry {
-    pub id: String,
-    pub client_type: ClientType,
     pub public_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterClientRequest {
     pub public_key: String,
-    pub client_type: ClientType,
     pub noise_handshake: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClientRegistrationProofPayload {
     pub public_key: String,
-    pub client_type: ClientType,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LookupClientResponse {
-    pub public_key: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterRelayRequest {
     pub public_key: String,
-    pub guid: String,
+    pub noise_handshake: String,
+
     pub api_key: String,
     pub port: u16,
-    pub noise_handshake: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RelayRegistrationProofPayload {
     pub public_key: String,
-    pub guid: String,
     pub api_key: String,
     pub port: u16,
 }
@@ -77,13 +61,10 @@ pub struct RelayTokenProofPayload {
 pub struct IssueRelayTokenResponse {
     pub token: String,
     pub expires_at: i64,
-    pub guid: String,
-    pub client_type: ClientType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RelayEntry {
-    pub guid: String,
     pub public_key: String,
     pub ip: String,
     pub port: u16,

@@ -14,8 +14,6 @@ pub struct Database {
 
 #[derive(Debug)]
 struct ClientRow {
-    id: String,
-    client_type: String,
     public_key: String,
     created_at: i64,
     last_seen: i64,
@@ -45,9 +43,7 @@ impl Database {
                     PRAGMA journal_mode=WAL;
 
                     CREATE TABLE IF NOT EXISTS clients (
-                        id TEXT PRIMARY KEY,
-                        client_type TEXT NOT NULL,
-                        public_key TEXT NOT NULL,
+                        public_key TEXT PRIMARY KEY,
                         created_at INTEGER NOT NULL,
                         last_seen INTEGER NOT NULL
                     );
@@ -56,35 +52,11 @@ impl Database {
                         key TEXT PRIMARY KEY,
                         value BLOB NOT NULL
                     );
-
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_public_key
-                    ON clients(public_key);
                 ",
                 )?;
                 Ok(())
             })
             .await?;
-
-        let has_legacy_owner_id = self
-            .conn
-            .call(|conn| -> rusqlite::Result<bool> {
-                let mut stmt = conn.prepare("PRAGMA table_info(clients)")?;
-                let mut rows = stmt.query([])?;
-                while let Some(row) = rows.next()? {
-                    let column_name: String = row.get(1)?;
-                    if column_name == "owner_id" {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            })
-            .await?;
-
-        if has_legacy_owner_id {
-            return Err(anyhow!(
-                "legacy clients schema detected (owner_id column); fresh database required"
-            ));
-        }
 
         Ok(())
     }
@@ -176,18 +148,14 @@ impl Database {
     // Clients
     fn row_to_client_row(row: &Row<'_>) -> rusqlite::Result<ClientRow> {
         Ok(ClientRow {
-            id: row.get(0)?,
-            client_type: row.get(1)?,
-            public_key: row.get(2)?,
-            created_at: row.get(3)?,
-            last_seen: row.get(4)?,
+            public_key: row.get(0)?,
+            created_at: row.get(1)?,
+            last_seen: row.get(2)?,
         })
     }
 
     fn client_from_row(row: ClientRow) -> Result<Client> {
         Ok(Client {
-            id: row.id,
-            client_type: row.client_type.parse()?,
             public_key: row.public_key,
             created_at: row.created_at,
             last_seen: row.last_seen,
@@ -199,11 +167,9 @@ impl Database {
         self.conn
             .call(move |conn| -> rusqlite::Result<()> {
                 conn.execute(
-                    "INSERT INTO clients (id, client_type, public_key, created_at, last_seen)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO clients (public_key, created_at, last_seen)
+                     VALUES (?1, ?2, ?3)",
                     rusqlite::params![
-                        client.id,
-                        client.client_type.to_string(),
                         client.public_key,
                         client.created_at,
                         client.last_seen,

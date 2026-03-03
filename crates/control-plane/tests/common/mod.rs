@@ -2,7 +2,8 @@
 
 use std::future::Future;
 
-use hoshi_control_plane::{Config, ServerState, create_listeners, run};
+use hoshi_control_plane::{Config, ServerState, run};
+use hoshi_server_util::create_http_listener;
 use tempfile::TempDir;
 
 mod api;
@@ -34,7 +35,7 @@ where
         .expect("set_http_bind_addr");
 
     // Create listeners and get actual ports
-    let (http_listener, http_addr) = create_listeners(&config).expect("Failed to create listeners");
+    let (http_listener, http_addr) = create_http_listener(config.http_bind_address).expect("Failed to create listeners");
 
     println!("HTTP bound to: {}", http_addr);
 

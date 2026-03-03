@@ -926,31 +926,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hoshi-clientlib"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "dirs",
- "futures-util",
- "hoshi-control-plane",
- "hoshi-protocol",
- "hoshi-relay",
- "hoshi-test-support",
- "rand_core 0.6.4",
- "reqwest",
- "serde",
- "serde_json",
- "snow",
- "tempfile",
- "tokio",
- "tokio-rusqlite",
- "tokio-tungstenite",
- "uuid",
- "x25519-dalek",
-]
-
-[[package]]
 name = "hoshi-control-plane"
 version = "0.1.0"
 dependencies = [
@@ -973,19 +948,6 @@ dependencies = [
  "tokio-rusqlite",
  "uuid",
  "x25519-dalek",
-]
-
-[[package]]
-name = "hoshi-integration-tests"
-version = "0.1.0"
-dependencies = [
- "hoshi-control-plane",
- "hoshi-protocol",
- "hoshi-relay",
- "hoshi-test-support",
- "reqwest",
- "tempfile",
- "tokio",
 ]
 
 [[package]]
@@ -1031,15 +993,6 @@ version = "0.1.0"
 dependencies = [
  "sd-notify",
  "tokio",
-]
-
-[[package]]
-name = "hoshi-test-support"
-version = "0.1.0"
-dependencies = [
- "hoshi-control-plane",
- "hoshi-relay",
- "tempfile",
 ]
 
 [[package]]
@@ -1123,7 +1076,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.6",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -1840,7 +1793,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots 1.0.6",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -2357,12 +2310,8 @@ checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
 dependencies = [
  "futures-util",
  "log",
- "rustls",
- "rustls-pki-types",
  "tokio",
- "tokio-rustls",
  "tungstenite",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -2524,8 +2473,6 @@ dependencies = [
  "httparse",
  "log",
  "rand",
- "rustls",
- "rustls-pki-types",
  "sha1",
  "thiserror",
  "utf-8",
@@ -2762,15 +2709,6 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "0.26.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
-dependencies = [
- "webpki-roots 1.0.6",
 ]
 
 [[package]]

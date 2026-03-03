@@ -3,11 +3,8 @@ members = [
     "crates/control-plane",
     "crates/client-gtk",
     "crates/relay",
-    "crates/clientlib",
     "crates/protocol",
-    "crates/integration-tests",
     "crates/server-util",
-    "crates/test-support",
 ]
 resolver = "2"
 

@@ -6,13 +6,11 @@ mod routes;
 mod state;
 mod utils;
 
-use std::net::SocketAddr;
-
-pub use client::{Client, ClientType};
+pub use client::Client;
 pub use config::Config;
 pub use database::Database;
 use hoshi_server_util::{
-    create_http_listener, create_listener as create_tcp_listener,
+    create_http_listener,
     systemd_notify_ready_with_watchdog,
 };
 pub(crate) use routes::*;
@@ -65,16 +63,6 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
     }
 }
 
-/// Create and bind a TCP listener with appropriate socket options
-pub fn create_listener(addr: SocketAddr, reuse_port: bool) -> std::io::Result<TcpListener> {
-    create_tcp_listener(addr, reuse_port)
-}
-
-/// Create HTTP listener, returning listener and their bound address
-pub fn create_listeners(config: &Config) -> std::io::Result<(TcpListener, SocketAddr)> {
-    create_http_listener(config.http_bind_address, config.reuse_port)
-}
-
 pub fn run_multi_thread(config: Config, process_start: std::time::Instant) {
     let runtime = Builder::new_multi_thread()
         .enable_all()
@@ -84,7 +72,7 @@ pub fn run_multi_thread(config: Config, process_start: std::time::Instant) {
     runtime.block_on(async {
         // Create listeners inside the runtime
         let (http_listener, http_addr) =
-            create_listeners(&config).expect("Failed to create listeners");
+            create_http_listener(config.http_bind_address).expect("Failed to create listeners");
 
         // Update config with actual addresses
         let config = config.update_bound_addresses(http_addr);

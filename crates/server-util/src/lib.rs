@@ -2,29 +2,21 @@ use std::net::SocketAddr;
 
 use tokio::net::{TcpListener, TcpSocket};
 
-pub fn create_listener(addr: SocketAddr, reuse_port: bool) -> std::io::Result<TcpListener> {
+pub fn create_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
     let socket = if addr.is_ipv4() {
         TcpSocket::new_v4()?
     } else {
         TcpSocket::new_v6()?
     };
-
     socket.set_reuseaddr(true)?;
-
-    #[cfg(target_os = "linux")]
-    socket.set_reuseport(reuse_port)?;
-    #[cfg(not(target_os = "linux"))]
-    let _ = reuse_port;
-
     socket.bind(addr)?;
     socket.listen(1024)
 }
 
 pub fn create_http_listener(
     addr: SocketAddr,
-    reuse_port: bool,
 ) -> std::io::Result<(TcpListener, SocketAddr)> {
-    let http_listener = create_listener(addr, reuse_port)?;
+    let http_listener = create_listener(addr)?;
     let http_addr = http_listener.local_addr()?;
     Ok((http_listener, http_addr))
 }

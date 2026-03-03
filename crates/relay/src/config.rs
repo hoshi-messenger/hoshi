@@ -5,20 +5,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use hoshi_protocol::noise;
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub config_path: PathBuf,
     pub http_bind_address: SocketAddr,
-    pub reuse_port: bool,
     pub control_plane_uri: String,
-    pub guid: String,
-    pub noise_static_private_key: String,
     pub api_key: String,
 }
 
@@ -26,10 +19,7 @@ pub struct Config {
 #[serde(default)]
 struct ConfigToml {
     http_bind_address: SocketAddr,
-    reuse_port: bool,
     control_plane_uri: String,
-    guid: String,
-    noise_static_private_key: String,
     api_key: String,
 }
 
@@ -37,10 +27,7 @@ impl Default for ConfigToml {
     fn default() -> Self {
         Self {
             http_bind_address: default_http_bind_address(),
-            reuse_port: false,
             control_plane_uri: default_control_plane_uri(),
-            guid: Uuid::now_v7().to_string(),
-            noise_static_private_key: generate_noise_static_private_key(),
             api_key: String::new(),
         }
     }
@@ -60,45 +47,21 @@ fn default_control_plane_uri() -> String {
     if cfg!(debug_assertions) {
         "http://127.0.0.1:2600".to_string()
     } else {
-        "https://cp.wikinarau.org".to_string()
+        "https://hoshi.wikinarau.org".to_string()
     }
 }
 
-fn generate_noise_static_private_key() -> String {
-    let mut key = [0_u8; 32];
-    OsRng.fill_bytes(&mut key);
-    STANDARD.encode(key)
-}
-
 impl ConfigToml {
-    fn normalize(mut self) -> Result<Self> {
+    fn normalize(mut self) -> Self {
         self.control_plane_uri = if self.control_plane_uri.trim().is_empty() {
             default_control_plane_uri()
         } else {
             self.control_plane_uri.trim().to_string()
         };
 
-        self.guid = if self.guid.trim().is_empty() {
-            Uuid::now_v7().to_string()
-        } else {
-            Uuid::parse_str(self.guid.trim())
-                .context("invalid guid")?
-                .to_string()
-        };
-
-        self.noise_static_private_key = if self.noise_static_private_key.trim().is_empty() {
-            generate_noise_static_private_key()
-        } else {
-            noise::canonicalize_base64_32(
-                self.noise_static_private_key.trim(),
-                "noise_static_private_key",
-            )?
-            .0
-        };
-
         self.api_key = self.api_key.trim().to_string();
 
-        Ok(self)
+        self
     }
 }
 
@@ -131,7 +94,7 @@ impl Config {
         } else {
             ConfigToml::default()
         }
-        .normalize()?;
+        .normalize();
 
         let serialized =
             toml::to_string_pretty(&file_config).context("failed to serialize relay config")?;
@@ -152,10 +115,7 @@ impl Config {
         Ok(Self {
             config_path,
             http_bind_address: file_config.http_bind_address,
-            reuse_port: file_config.reuse_port,
             control_plane_uri: file_config.control_plane_uri,
-            guid: file_config.guid,
-            noise_static_private_key: file_config.noise_static_private_key,
             api_key: file_config.api_key,
         })
     }

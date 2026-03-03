@@ -3,10 +3,10 @@ mod http;
 mod routes;
 mod state;
 
-use std::{future::Future, net::SocketAddr};
+use std::{future::Future};
 
 pub use config::Config;
-use hoshi_server_util::{create_http_listener, create_listener as create_tcp_listener};
+use hoshi_server_util::create_http_listener;
 pub use state::ServerState;
 use tokio::{net::TcpListener, runtime::Builder};
 
@@ -17,23 +17,6 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
         "[{:?}] - Hoshi relay started",
         state.process_start.elapsed()
     );
-
-    match state.probe_control_plane().await {
-        Ok(status) => {
-            println!(
-                "[{:?}] - Control-plane probe OK: {} ({status})",
-                state.process_start.elapsed(),
-                state.config.control_plane_uri
-            );
-        }
-        Err(err) => {
-            eprintln!(
-                "[{:?}] - Control-plane probe failed: {} ({err})",
-                state.process_start.elapsed(),
-                state.config.control_plane_uri
-            );
-        }
-    }
 
     #[cfg(unix)]
     let terminate = async {
@@ -49,9 +32,6 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
     let http_server = http::http_server(state.clone(), http_listener)
         .await
         .expect("couldn't start relay http server");
-
-    let jwt_refresh_task = tokio::spawn(state.clone().run_relay_jwt_key_refresh_loop());
-    let relay_registration_task = tokio::spawn(state.clone().run_relay_registration_loop());
 
     println!("[{:?}] - Hoshi relay ready", state.process_start.elapsed());
 
@@ -69,17 +49,6 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
             eprintln!("Received Kill!");
         }
     }
-
-    jwt_refresh_task.abort();
-    relay_registration_task.abort();
-}
-
-pub fn create_listener(addr: SocketAddr, reuse_port: bool) -> std::io::Result<TcpListener> {
-    create_tcp_listener(addr, reuse_port)
-}
-
-pub fn create_listeners(config: &Config) -> std::io::Result<(TcpListener, SocketAddr)> {
-    create_http_listener(config.http_bind_address, config.reuse_port)
 }
 
 pub fn run_multi_thread(config: Config, process_start: std::time::Instant) {
@@ -90,7 +59,7 @@ pub fn run_multi_thread(config: Config, process_start: std::time::Instant) {
 
     runtime.block_on(async {
         let (http_listener, http_addr) =
-            create_listeners(&config).expect("failed to create listeners");
+            create_http_listener(config.http_bind_address).expect("failed to create listeners");
         let config = config.update_bound_addresses(http_addr);
 
         let state = ServerState::new(config, process_start)
