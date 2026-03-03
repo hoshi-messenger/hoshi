@@ -1,7 +1,8 @@
 mod common;
 
-use common::{HealthzResponse, RelayApi, with_relay};
+use common::{RelayApi, with_relay};
 use reqwest::StatusCode;
+use hoshi_relay::api;
 
 #[tokio::test]
 async fn basic_http_routes() {
@@ -19,7 +20,7 @@ async fn basic_http_routes() {
         let healthz = api.get_healthz().await.expect("healthz response");
         assert_eq!(healthz.status(), StatusCode::OK);
         let body = healthz
-            .json::<HealthzResponse>()
+            .json::<api::HealthzResponse>()
             .await
             .expect("healthz json body");
         assert_eq!(body.status, "ok");

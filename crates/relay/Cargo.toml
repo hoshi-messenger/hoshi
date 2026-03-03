@@ -21,7 +21,6 @@ snow = { workspace = true }
 dirs = { workspace = true }
 toml = { workspace = true }
 
-hoshi-protocol = { path = "../protocol" }
 hoshi-server-util = { path = "../server-util" }
 
 [dev-dependencies]

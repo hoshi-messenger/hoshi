@@ -3,14 +3,13 @@ use std::{sync::Arc, time::Instant};
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use dashmap::DashMap;
-use hoshi_protocol::control_plane::RelayEntry;
 use rand_core::{OsRng, RngCore};
 
-use crate::{Config, database::Database};
+use crate::{Config, database::Database, api};
 
 #[derive(Debug, Clone)]
 pub struct RelayPresence {
-    pub entry: RelayEntry,
+    pub entry: api::RelayEntry,
     pub last_seen: i64,
 }
 

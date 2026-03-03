@@ -3,7 +3,6 @@ members = [
     "crates/control-plane",
     "crates/client-gtk",
     "crates/relay",
-    "crates/protocol",
     "crates/server-util",
 ]
 resolver = "2"

@@ -935,7 +935,6 @@ dependencies = [
  "dashmap",
  "dirs",
  "ed25519-dalek",
- "hoshi-protocol",
  "hoshi-server-util",
  "jsonwebtoken",
  "rand_core 0.6.4",
@@ -951,18 +950,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hoshi-protocol"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "serde",
- "serde_json",
- "snow",
- "x25519-dalek",
-]
-
-[[package]]
 name = "hoshi-relay"
 version = "0.1.0"
 dependencies = [
@@ -972,7 +959,6 @@ dependencies = [
  "dashmap",
  "dirs",
  "ed25519-dalek",
- "hoshi-protocol",
  "hoshi-server-util",
  "jsonwebtoken",
  "rand_core 0.6.4",

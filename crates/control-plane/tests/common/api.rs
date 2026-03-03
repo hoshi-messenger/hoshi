@@ -1,8 +1,3 @@
-pub use hoshi_protocol::control_plane::{
-    ClientEntry, IssueRelayTokenRequest, IssueRelayTokenResponse, 
-    NoisePublicKeyResponse, RegisterClientRequest, RegisterRelayRequest, RelayEntry,
-    RelayJwtPublicKeyResponse,
-};
 use reqwest::Client;
 
 #[derive(Debug, Clone)]

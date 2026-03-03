@@ -4,16 +4,15 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
-use hoshi_protocol::relay::HealthzResponse;
 
-use crate::ServerState;
+use crate::{ServerState, api};
 
 pub async fn index_get(State(_state): State<ServerState>) -> Html<String> {
     Html("<h1>Welcome to the Hoshi relay!</h1>".to_string())
 }
 
 pub async fn healthz_get(State(state): State<ServerState>) -> impl IntoResponse {
-    Json(HealthzResponse {
+    Json(api::HealthzResponse {
         status: "ok".to_string(),
         public_key: "TEST".to_string(),
         control_plane_uri: state.config.control_plane_uri.clone(),
@@ -32,10 +31,8 @@ pub async fn relay_ws_get(
     ws.on_upgrade(async move |mut socket| {
         loop {
             let msg = socket.recv().await;
-            if let Some(Ok(msg)) = msg {
-                if socket.send(msg).await.is_err() {
-                    break;
-                }
+            if let Some(Ok(msg)) = msg && socket.send(msg).await.is_err() {
+                break;
             }
         }
     }).into_response()

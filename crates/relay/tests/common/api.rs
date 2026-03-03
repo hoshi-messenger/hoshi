@@ -1,4 +1,3 @@
-pub use hoshi_protocol::relay::HealthzResponse;
 use reqwest::Client;
 
 #[derive(Debug, Clone)]

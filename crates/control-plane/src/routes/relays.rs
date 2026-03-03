@@ -4,18 +4,15 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use hoshi_protocol::control_plane::{
-    RelayEntry, 
-};
 
-use crate::{ServerState, now};
+use crate::{ServerState, now, api};
 
 const RELAY_TTL_SECONDS: i64 = 90;
 
 pub(crate) async fn list_relays_get(State(state): State<ServerState>) -> Response {
     let now_ts = now();
     let mut stale_keys = Vec::new();
-    let mut relays: Vec<RelayEntry> = Vec::new();
+    let mut relays: Vec<api::RelayEntry> = Vec::new();
 
     for relay in state.relays.iter() {
         let relay_age = now_ts.saturating_sub(relay.value().last_seen);

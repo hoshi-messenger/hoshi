@@ -20,7 +20,6 @@ jsonwebtoken = { workspace = true }
 ed25519-dalek = { workspace = true }
 dirs = { workspace = true }
 
-hoshi-protocol = { path = "../protocol" }
 hoshi-server-util = { path = "../server-util" }
 
 [dev-dependencies]

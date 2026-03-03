@@ -1,7 +1,7 @@
-use hoshi_protocol::control_plane as protocol;
 use serde::{Deserialize, Serialize};
 
 use crate::now;
+use crate::api;
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,7 +21,7 @@ impl Client {
     }
 }
 
-impl From<&Client> for protocol::ClientEntry {
+impl From<&Client> for api::ClientEntry {
     fn from(value: &Client) -> Self {
         Self {
             public_key: value.public_key.clone(),
