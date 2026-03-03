@@ -1,14 +1,9 @@
 use std::net::SocketAddr;
 
-use axum::{
-    Router,
-    routing::get,
-};
+use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 
-use crate::{
-    ServerState, index_get, list_relays_get,
-};
+use crate::{ServerState, index_get, list_relays_get};
 
 pub async fn http_server(
     state: ServerState,

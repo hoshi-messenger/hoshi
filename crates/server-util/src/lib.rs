@@ -13,9 +13,7 @@ pub fn create_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
     socket.listen(1024)
 }
 
-pub fn create_http_listener(
-    addr: SocketAddr,
-) -> std::io::Result<(TcpListener, SocketAddr)> {
+pub fn create_http_listener(addr: SocketAddr) -> std::io::Result<(TcpListener, SocketAddr)> {
     let http_listener = create_listener(addr)?;
     let http_addr = http_listener.local_addr()?;
     Ok((http_listener, http_addr))

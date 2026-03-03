@@ -920,6 +920,7 @@ name = "hoshi-client-gtk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "glib",
  "gtk4",
  "libadwaita",

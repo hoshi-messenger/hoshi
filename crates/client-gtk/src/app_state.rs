@@ -1,6 +1,40 @@
+use base64::prelude::*;
+use std::collections::HashMap;
+
 use adw::{Application, ApplicationWindow, HeaderBar, NavigationView, ToolbarView, prelude::*};
+use gtk::CssProvider;
 
 use crate::{view_contact_list, view_settings};
+
+fn generate_emoji_alias(public_key: &str) -> String {
+    const EMOJIS: &[&str] = &[
+        "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵",
+        "🐔", "🐧", "🐦", "🦆", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞",
+        "🦎", "🐍", "🐢", "🦖", "🦕", "🐙", "🦑", "🦐", "🦀", "🐡", "🐠", "🐟", "🐬", "🐳", "🦈",
+        "🐊", "🦧", "🦥", "🦦", "🦔",
+    ];
+
+    let hash: u64 = public_key.bytes().fold(0xcbf29ce484222325u64, |acc, b| {
+        acc.wrapping_mul(0x100000001b3).wrapping_add(b as u64) // FNV-1a
+    });
+
+    let first = EMOJIS[(hash % EMOJIS.len() as u64) as usize];
+    let second = EMOJIS[((hash >> 8) % EMOJIS.len() as u64) as usize];
+
+    format!("{}{}", first, second)
+}
+
+#[derive(Debug, Clone)]
+pub struct Contact {
+    pub public_key: String,
+    pub alias: String,
+}
+impl Contact {
+    pub fn new(public_key: String, alias: Option<String>) -> Contact {
+        let alias = alias.unwrap_or_else(|| generate_emoji_alias(&public_key));
+        Self { public_key, alias }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -9,6 +43,46 @@ pub struct AppState {
     pub header: HeaderBar,
     pub toolbar: ToolbarView,
     pub win: ApplicationWindow,
+
+    pub contacts: HashMap<String, Contact>,
+}
+
+fn add_css() {
+    let bytes = include_bytes!("../assets/chat_bg.png");
+    let b64 = BASE64_STANDARD.encode(bytes); // using the `base64` crate
+
+    let provider = CssProvider::new();
+    provider.load_from_string(&format!(
+        "
+        .chat-background {{
+            background-image: url('data:image/png;base64,{b64}');
+            background-repeat: repeat;
+        }}
+
+        .chat-message {{
+            background-color: rgba(255,0,255,0.3);
+            padding: 8px;
+            border-radius:16px;
+            margin-bottom:16px;
+        }}
+
+        .chat-message-from-me {{
+            background-color: rgba(192,156,255,0.2);
+            margin-left:48px;
+        }}
+
+        .chat-message-to-me {{
+            background-color: rgba(228,228,228,0.2);
+            margin-right:48px;
+        }}
+    "
+    ));
+
+    gtk::style_context_add_provider_for_display(
+        &gtk::gdk::Display::default().unwrap(),
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 }
 
 fn force_dark_mode() {
@@ -16,28 +90,39 @@ fn force_dark_mode() {
 }
 
 impl AppState {
+    fn placeholder_contacts() -> HashMap<String, Contact> {
+        HashMap::from([
+            (
+                "123456".to_string(),
+                Contact::new("123456".to_string(), None),
+            ),
+            (
+                "test".to_string(),
+                Contact::new("test".to_string(), Some("Testuser".to_string())),
+            ),
+        ])
+    }
+
     pub fn start(app: Application) {
         force_dark_mode();
-
-
+        add_css();
 
         let toolbar = ToolbarView::builder()
-            .top_bar_style(adw::ToolbarStyle::Flat)
+            .top_bar_style(adw::ToolbarStyle::Raised)
             .build();
 
         let header = HeaderBar::builder().build();
 
         let settings_btn = gtk::ToggleButton::new();
-        
+
         settings_btn.add_css_class("flat");
         settings_btn.set_tooltip_text(Some("Settings"));
         let settings_icon = gtk::Image::from_icon_name("emblem-system-symbolic");
         settings_btn.set_child(Some(&settings_icon));
         settings_btn.set_active(false);
-        
+
         header.pack_end(&settings_btn);
         toolbar.add_top_bar(&header);
-
 
         let nav = NavigationView::builder().build();
         toolbar.set_content(Some(&nav));
@@ -49,9 +134,10 @@ impl AppState {
             .build();
         win.set_content(Some(&toolbar));
 
-
         // Get rid of 5px padding
         win.remove_css_class("solid-csd");
+
+        let contacts = Self::placeholder_contacts();
 
         let state = Self {
             app,
@@ -59,6 +145,7 @@ impl AppState {
             header,
             toolbar,
             win: win.clone(),
+            contacts,
         };
         {
             let state = state.clone();

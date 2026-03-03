@@ -31,11 +31,14 @@ pub async fn relay_ws_get(
     ws.on_upgrade(async move |mut socket| {
         loop {
             let msg = socket.recv().await;
-            if let Some(Ok(msg)) = msg && socket.send(msg).await.is_err() {
+            if let Some(Ok(msg)) = msg
+                && socket.send(msg).await.is_err()
+            {
                 break;
             }
         }
-    }).into_response()
+    })
+    .into_response()
 }
 
 fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -51,9 +54,5 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 }
 
 fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
-    (
-        status,
-        message.into(),
-    )
-        .into_response()
+    (status, message.into()).into_response()
 }

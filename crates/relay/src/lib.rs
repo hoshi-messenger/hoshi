@@ -4,7 +4,7 @@ mod http;
 mod routes;
 mod state;
 
-use std::{future::Future};
+use std::future::Future;
 
 pub use config::Config;
 use hoshi_server_util::create_http_listener;

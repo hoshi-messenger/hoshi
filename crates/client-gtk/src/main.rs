@@ -1,7 +1,7 @@
 use adw::Application;
+use adw::prelude::*;
 use glib::ExitCode;
 use hoshi_client_gtk::AppState;
-use adw::prelude::*;
 
 const APP_ID: &str = "org.hoshi.hoshi-client-gtk";
 
@@ -12,4 +12,3 @@ fn main() -> ExitCode {
     });
     app.run()
 }
-

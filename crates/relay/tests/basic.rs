@@ -1,8 +1,8 @@
 mod common;
 
 use common::{RelayApi, with_relay};
-use reqwest::StatusCode;
 use hoshi_relay::api;
+use reqwest::StatusCode;
 
 #[tokio::test]
 async fn basic_http_routes() {

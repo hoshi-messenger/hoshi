@@ -22,7 +22,6 @@ fn relay_api_key_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-
 impl Default for Config {
     fn default() -> Self {
         let dir_root = dirs::home_dir()

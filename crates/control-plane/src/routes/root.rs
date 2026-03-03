@@ -1,7 +1,4 @@
-use axum::{
-    extract::State,
-    response::Html,
-};
+use axum::{extract::State, response::Html};
 
 use crate::{ServerState, utils::response_html};
 

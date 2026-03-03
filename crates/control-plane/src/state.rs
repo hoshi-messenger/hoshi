@@ -5,7 +5,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use dashmap::DashMap;
 use rand_core::{OsRng, RngCore};
 
-use crate::{Config, database::Database, api};
+use crate::{Config, api, database::Database};
 
 #[derive(Debug, Clone)]
 pub struct RelayPresence {
@@ -29,7 +29,7 @@ impl ServerState {
         db.init().await?;
 
         Self::initialize_relay_api_key(&mut config, &db).await?;
-        
+
         Ok(Self {
             process_start,
             config: Arc::new(config),

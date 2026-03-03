@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::now;
 use crate::api;
-
+use crate::now;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Client {

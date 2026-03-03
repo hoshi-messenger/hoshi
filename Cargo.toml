@@ -32,6 +32,6 @@ tempfile = "3"
 toml = "1"
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
-adw = { package = "libadwaita", version = "0.9", features = ["v1_6"]}
+adw = { package = "libadwaita", version = "0.9", features = ["v1_8"]}
 glib = "0.22"
 gtk = { package = "gtk4", version = "0.11", features = ["v4_18"]}

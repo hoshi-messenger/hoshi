@@ -10,10 +10,7 @@ mod utils;
 pub use client::Client;
 pub use config::Config;
 pub use database::Database;
-use hoshi_server_util::{
-    create_http_listener,
-    systemd_notify_ready_with_watchdog,
-};
+use hoshi_server_util::{create_http_listener, systemd_notify_ready_with_watchdog};
 pub(crate) use routes::*;
 
 pub use state::{RelayPresence, ServerState};

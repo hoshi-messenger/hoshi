@@ -5,7 +5,9 @@ use crate::AppState;
 
 pub fn view_settings(state: AppState) {
     let page = NavigationPage::builder().title("Hoshi Messenger").build();
-    let vbox = Box::builder().orientation(gtk::Orientation::Vertical).build();
+    let vbox = Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
 
     let button = Button::builder().label("Settings!").build();
     button.connect_clicked(|button: &Button| {

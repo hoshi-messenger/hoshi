@@ -35,7 +35,8 @@ where
         .expect("set_http_bind_addr");
 
     // Create listeners and get actual ports
-    let (http_listener, http_addr) = create_http_listener(config.http_bind_address).expect("Failed to create listeners");
+    let (http_listener, http_addr) =
+        create_http_listener(config.http_bind_address).expect("Failed to create listeners");
 
     println!("HTTP bound to: {}", http_addr);
 

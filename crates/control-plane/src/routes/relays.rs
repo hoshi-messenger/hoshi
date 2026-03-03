@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::{ServerState, now, api};
+use crate::{ServerState, api, now};
 
 const RELAY_TTL_SECONDS: i64 = 90;
 

@@ -169,11 +169,7 @@ impl Database {
                 conn.execute(
                     "INSERT INTO clients (public_key, created_at, last_seen)
                      VALUES (?1, ?2, ?3)",
-                    rusqlite::params![
-                        client.public_key,
-                        client.created_at,
-                        client.last_seen,
-                    ],
+                    rusqlite::params![client.public_key, client.created_at, client.last_seen,],
                 )?;
                 Ok(())
             })
