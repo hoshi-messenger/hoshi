@@ -2,6 +2,7 @@
 members = [
     "crates/control-plane",
     "crates/client-gtk",
+    "crates/clientlib",
     "crates/relay",
     "crates/server-util",
 ]

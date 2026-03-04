@@ -9,8 +9,8 @@ fn contact_box(contact: &Contact) -> Box {
         .size(40)
         .margin_start(8)
         .margin_end(8)
-        .margin_top(6)
-        .margin_bottom(6)
+        .margin_top(8)
+        .margin_bottom(8)
         .show_initials(true)
         .build();
 
