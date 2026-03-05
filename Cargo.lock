@@ -936,6 +936,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

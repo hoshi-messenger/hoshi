@@ -9,4 +9,4 @@ tokio = { workspace = true }
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
 dirs = { workspace = true }
-
+uuid = { workspace = true }

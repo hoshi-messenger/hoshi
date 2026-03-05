@@ -1,4 +1,7 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+};
 
 use anyhow::Result;
 
@@ -12,7 +15,8 @@ pub struct HoshiClient {
     contacts: RefCell<HashMap<String, Contact>>,
     contacts_watchers: RefCell<Vec<Box<dyn Fn(&HashMap<String, Contact>)>>>,
 
-    messages: RefCell<HashMap<String, Vec<ChatMessage>>>,
+    messages: RefCell<HashMap<String, HashMap<String, ChatMessage>>>,
+    messages_watchers: RefCell<Vec<(String, Box<dyn Fn(&str, &HashMap<String, ChatMessage>)>)>>,
 }
 
 impl HoshiClient {
@@ -28,6 +32,7 @@ impl HoshiClient {
         let contacts = RefCell::new(HashMap::new());
         let contacts_watchers = RefCell::new(vec![]);
         let messages = RefCell::new(HashMap::new());
+        let messages_watchers = RefCell::new(vec![]);
 
         Ok(Self {
             net,
@@ -35,7 +40,12 @@ impl HoshiClient {
             contacts,
             contacts_watchers,
             messages,
+            messages_watchers,
         })
+    }
+
+    pub fn public_key(&self) -> String {
+        "asdqwe".to_string()
     }
 
     fn contacts_changed(&self) {
@@ -43,6 +53,19 @@ impl HoshiClient {
         for watcher in &*watchers {
             let contacts = self.contacts.borrow();
             watcher(&contacts);
+        }
+    }
+
+    fn messages_changed(&self, chat_id: String) {
+        let watchers = self.messages_watchers.borrow();
+        for (filter, watcher) in &*watchers {
+            if filter.is_empty() || filter == &chat_id {
+                let messages = self.messages.borrow();
+                let messages = messages.get(&chat_id);
+                if let Some(messages) = messages {
+                    watcher(&chat_id, messages);
+                }
+            }
         }
     }
 
@@ -63,7 +86,18 @@ impl HoshiClient {
                 }
                 self.contacts_changed();
             }
-            DBReply::Messages(_msgs) => {}
+            DBReply::Messages(msgs) => {
+                let mut chat_ids = HashSet::new();
+                for msg in msgs {
+                    let chat_id = msg.chat_id();
+                    chat_ids.insert(chat_id.to_string());
+                    self.save_chat_message(msg);
+                }
+
+                for chat_id in chat_ids.drain() {
+                    self.messages_changed(chat_id);
+                }
+            }
         }
     }
 
@@ -92,6 +126,53 @@ impl HoshiClient {
         msgs
     }
 
+    fn save_chat_message(&self, msg: ChatMessage) {
+        let chat_id = msg.chat_id();
+        {
+            let mut chats = self.messages.borrow_mut();
+            let chat = chats.get_mut(&chat_id);
+            if let Some(chat) = chat {
+                chat.insert(msg.id.to_string(), msg.clone());
+            } else {
+                let mut chat = HashMap::new();
+                chat.insert(msg.id.to_string(), msg.clone());
+                chats.insert(chat_id.clone(), chat);
+            }
+        }
+    }
+
+    pub fn message_upsert(&self, msg: ChatMessage) -> Result<()> {
+        let chat_id = msg.chat_id();
+        self.save_chat_message(msg.clone());
+        self.db.message_upsert(msg)?;
+        self.messages_changed(chat_id);
+
+        Ok(())
+    }
+
+    pub fn messages_watch<F>(&self, filter: String, f: F)
+    where
+        F: Fn(&str, &HashMap<String, ChatMessage>) + 'static,
+    {
+        {
+            let chats = self.messages.borrow();
+            if filter.is_empty() {
+                for chat_id in chats.keys() {
+                    if let Some(chat) = chats.get(chat_id) {
+                        f(chat_id, chat);
+                    }
+                }
+            } else {
+                if let Some(chat) = chats.get(&filter) {
+                    f(&filter, chat);
+                }
+            }
+        }
+
+        let mut watchers = self.messages_watchers.borrow_mut();
+        watchers.push((filter.to_string(), Box::new(f)));
+    }
+
     pub fn with_contacts<F>(&self, f: F)
     where
         F: FnOnce(&HashMap<String, Contact>) + 'static,
@@ -104,6 +185,8 @@ impl HoshiClient {
     where
         F: Fn(&HashMap<String, Contact>) + 'static,
     {
+        let contacts = self.contacts.borrow();
+        f(&contacts);
         let mut watchers = self.contacts_watchers.borrow_mut();
         watchers.push(Box::new(f));
     }
