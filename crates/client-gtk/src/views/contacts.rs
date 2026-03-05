@@ -4,15 +4,15 @@ use hoshi_clientlib::Contact;
 
 use crate::AppState;
 
-fn contact_box(contact: &Contact) -> Box {
+fn contact_box(state: AppState, contact: &Contact) -> Box {
     let avatar = Avatar::builder()
-        .name(&contact.alias)
         .size(40)
         .margin_start(8)
         .margin_end(8)
         .margin_top(8)
         .margin_bottom(8)
-        .show_initials(true)
+        .show_initials(false)
+        .text(&contact.alias)
         .build();
 
     let alias_label = Label::builder()
@@ -24,6 +24,7 @@ fn contact_box(contact: &Contact) -> Box {
     let key_label = Label::builder()
         .halign(gtk::Align::Start)
         .label(&contact.public_key)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
         .build();
     key_label.add_css_class("caption");
     key_label.add_css_class("dim-label");
@@ -32,6 +33,7 @@ fn contact_box(contact: &Contact) -> Box {
         .orientation(gtk::Orientation::Vertical)
         .valign(gtk::Align::Center)
         .margin_end(8)
+        .vexpand(true)
         .build();
     vbox.append(&alias_label);
     vbox.append(&key_label);
@@ -42,11 +44,25 @@ fn contact_box(contact: &Contact) -> Box {
     hbox.append(&avatar);
     hbox.append(&vbox);
 
+    let delete_button = Button::from_icon_name("user-trash-symbolic");
+    delete_button.add_css_class("flat");
+    {
+        let state = state.clone();
+        let public_key = contact.public_key.clone();
+        delete_button.connect_clicked(move |_| {
+            state
+                .client
+                .contact_delete(&public_key)
+                .expect("Couldn't delete contact");
+        });
+    }
+    hbox.append(&delete_button);
+
     hbox
 }
 
-fn add_contact(list: &ListBox, contact: &Contact) -> ListBoxRow {
-    let hbox = contact_box(contact);
+fn add_contact(state: AppState, list: &ListBox, contact: &Contact) -> ListBoxRow {
+    let hbox = contact_box(state, contact);
 
     let row = ListBoxRow::new();
     row.set_widget_name(&contact.public_key);
@@ -56,7 +72,7 @@ fn add_contact(list: &ListBox, contact: &Contact) -> ListBoxRow {
     row
 }
 
-fn view_chat_page(_state: AppState, page: NavigationPage, contact: Option<Contact>) {
+fn view_chat_page(state: AppState, page: NavigationPage, contact: Option<Contact>) {
     if let Some(contact) = contact {
         let center_box = CenterBox::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -66,7 +82,7 @@ fn view_chat_page(_state: AppState, page: NavigationPage, contact: Option<Contac
             .orientation(gtk::Orientation::Horizontal)
             .build();
 
-        let contact_info = contact_box(&contact);
+        let contact_info = contact_box(state, &contact);
         top_bar.append(&contact_info);
         center_box.set_start_widget(Some(&top_bar));
 
@@ -222,18 +238,35 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
 
     {
         let list = list.clone().downgrade();
-        state.client.contacts_watch(move |contacts| {
+        let chat = chat.clone();
+        let client = &state.client;
+        let state = state.clone();
+        client.contacts_watch(move |contacts| {
             // More efficient diffing would be nice in the future, good enough for an MVP though
             if let Some(list) = list.upgrade() {
                 let selected = list.selected_row().map(|r| r.widget_name().to_string());
                 list.remove_all();
-                for contact in contacts.values() {
-                    let row = add_contact(&list, contact);
+
+                let mut sorted_contacts = contacts.values().collect::<Vec<&Contact>>();
+                sorted_contacts.sort_by(|a, b| a.public_key.cmp(&b.public_key));
+
+                for contact in &sorted_contacts {
+                    let row = add_contact(state.clone(), &list, contact);
                     if let Some(selected) = &selected {
                         if &contact.public_key == selected {
                             row.activate();
                         }
                     }
+                }
+
+                if let Some(selected) = &selected {
+                    if state.client.contact_get(selected).is_none() {
+                        view_chat_page(state.clone(), chat.clone(), None);
+                        list.unselect_all();
+                    }
+                } else {
+                    view_chat_page(state.clone(), chat.clone(), None);
+                    list.unselect_all();
                 }
             }
         });

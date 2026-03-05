@@ -121,6 +121,17 @@ impl HoshiClient {
 
         Ok(())
     }
+
+    pub fn contact_delete(&self, public_key: &str) -> Result<()> {
+        {
+            let mut contacts = self.contacts.borrow_mut();
+            contacts.remove(public_key);
+        }
+        self.db.contact_delete(public_key.to_string())?;
+        self.contacts_changed();
+
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for HoshiClient {
