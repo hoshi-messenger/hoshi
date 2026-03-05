@@ -1,7 +1,8 @@
 use adw::{Avatar, Clamp, NavigationPage, NavigationSplitView, prelude::*};
 use gtk::{Box, Button, CenterBox, Label, ListBox, ListBoxRow, ScrolledWindow, TextView};
+use hoshi_clientlib::Contact;
 
-use crate::{AppState, app_state::Contact};
+use crate::AppState;
 
 fn contact_box(contact: &Contact) -> Box {
     let avatar = Avatar::builder()
@@ -177,16 +178,23 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
         .selection_mode(gtk::SelectionMode::Single)
         .build();
 
-    for contact in state.contacts.values() {
-        add_contact(&list, contact);
+    {   
+        let list = list.clone().downgrade();
+        state.client.with_contacts(move |contacts| {
+            if let Some(list) = list.upgrade() {
+                for contact in contacts.values() {
+                    add_contact(&list, contact);
+                } 
+            }
+        });
     }
 
     {
         let state = state.clone();
         list.connect_row_activated(move |_, row| {
             let key = row.widget_name().to_string();
-            if let Some(contact) = state.contacts.get(&key) {
-                view_chat_page(state.clone(), chat.clone(), Some(contact.clone()));
+            if let Some(contact) = state.client.contacts_get(&key) {
+                view_chat_page(state.clone(), chat.clone(), Some(contact));
             } else {
                 view_chat_page(state.clone(), chat.clone(), None);
                 println!("Selected: {key} - but couldn't find contact");

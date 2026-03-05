@@ -1,41 +1,11 @@
 use base64::prelude::*;
 use hoshi_clientlib::HoshiClient;
-use std::{collections::HashMap, rc::Rc, time::Duration};
+use std::{rc::Rc, time::Duration};
 
 use adw::{Application, ApplicationWindow, HeaderBar, NavigationView, ToolbarView, prelude::*};
 use gtk::CssProvider;
 
 use crate::{view_contact_list, view_settings};
-
-fn generate_emoji_alias(public_key: &str) -> String {
-    const EMOJIS: &[&str] = &[
-        "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵",
-        "🐔", "🐧", "🐦", "🦆", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞",
-        "🦎", "🐍", "🐢", "🦖", "🦕", "🐙", "🦑", "🦐", "🦀", "🐡", "🐠", "🐟", "🐬", "🐳", "🦈",
-        "🐊", "🦧", "🦥", "🦦", "🦔",
-    ];
-
-    let hash: u64 = public_key.bytes().fold(0xcbf29ce484222325u64, |acc, b| {
-        acc.wrapping_mul(0x100000001b3).wrapping_add(b as u64) // FNV-1a
-    });
-
-    let first = EMOJIS[(hash % EMOJIS.len() as u64) as usize];
-    let second = EMOJIS[((hash >> 8) % EMOJIS.len() as u64) as usize];
-
-    format!("{}{}", first, second)
-}
-
-#[derive(Debug, Clone)]
-pub struct Contact {
-    pub public_key: String,
-    pub alias: String,
-}
-impl Contact {
-    pub fn new(public_key: String, alias: Option<String>) -> Contact {
-        let alias = alias.unwrap_or_else(|| generate_emoji_alias(&public_key));
-        Self { public_key, alias }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -46,7 +16,6 @@ pub struct AppState {
     pub win: ApplicationWindow,
 
     pub client: Rc<HoshiClient>,
-    pub contacts: HashMap<String, Contact>,
 }
 
 fn add_css() {
@@ -92,30 +61,15 @@ fn force_dark_mode() {
 }
 
 impl AppState {
-    fn placeholder_contacts() -> HashMap<String, Contact> {
-        HashMap::from([
-            (
-                "123456".to_string(),
-                Contact::new("123456".to_string(), None),
-            ),
-            (
-                "test".to_string(),
-                Contact::new("test".to_string(), Some("Testuser".to_string())),
-            ),
-        ])
-    }
-
     fn spawn_client_handler_future(&self) {
         let client = self.client.clone();
-        glib::spawn_future_local(
-            async move {
-                let msgs = client.step();
-                // Adaptable timeout, make sure we don't poll as often if there
-                // are no messages in the mpsc
-                let millis = if msgs == 0 { 8 } else { 64 };
-                glib::timeout_future(Duration::from_millis(millis)).await;
-            }
-        );
+        glib::spawn_future_local(async move {
+            let msgs = client.step();
+            // Adaptable timeout, make sure we don't poll as often if there
+            // are no messages in the mpsc
+            let millis = if msgs == 0 { 8 } else { 64 };
+            glib::timeout_future(Duration::from_millis(millis)).await;
+        });
     }
 
     pub fn start(app: Application) {
@@ -153,7 +107,6 @@ impl AppState {
         win.remove_css_class("solid-csd");
 
         let client = HoshiClient::new().expect("Couldn't create HoshiClient");
-        let contacts = Self::placeholder_contacts();
 
         let state = Self {
             app,
@@ -162,7 +115,6 @@ impl AppState {
             toolbar,
             win: win.clone(),
             client: Rc::new(client),
-            contacts,
         };
         state.spawn_client_handler_future();
         {
