@@ -46,6 +46,14 @@ fn add_css() {
             background-color: rgba(228,228,228,0.2);
             margin-right:48px;
         }}
+
+        .bg-transparent {{
+            background: transparent;
+        }}
+
+        .bg-darken {{
+            background: rgba(0,0,0,0.2);
+        }}
     "
     ));
 

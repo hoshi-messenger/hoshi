@@ -10,7 +10,7 @@ pub struct HoshiClient {
     db: Database,
 
     contacts: RefCell<HashMap<String, Contact>>,
-    contacts_watchers: Vec<Box<dyn Fn(&HashMap<String, Contact>)>>,
+    contacts_watchers: RefCell<Vec<Box<dyn Fn(&HashMap<String, Contact>)>>>,
 }
 
 impl HoshiClient {
@@ -21,19 +21,22 @@ impl HoshiClient {
         let path = path.join("client.sqlite3");
         let db = Database::new(path)?;
         db.ping()?;
-        let contacts = Contact::placeholder_contacts();
-        let contacts_watchers = vec![];
+        db.contacts_get()?;
+
+        let contacts = RefCell::new(HashMap::new());
+        let contacts_watchers = RefCell::new(vec![]);
 
         Ok(Self {
             net,
             db,
-            contacts: RefCell::new(contacts),
+            contacts,
             contacts_watchers,
         })
     }
 
     fn contacts_changed(&self) {
-        for watcher in &self.contacts_watchers {
+        let watchers = self.contacts_watchers.borrow();
+        for watcher in &*watchers {
             let contacts = self.contacts.borrow();
             watcher(&contacts);
         }
@@ -43,18 +46,20 @@ impl HoshiClient {
         match msg {
             DBReply::Pong => {
                 println!("Client/DB: Pong");
-            },
+            }
             DBReply::Shutdown => {
                 println!("Client/DB: Shutdown");
-            },
-            DBReply::DeleteContact { public_key } => {
-                let mut contacts = self.contacts.borrow_mut();
-                contacts.remove(&public_key);
-                self.contacts_changed();
-            },
-            DBReply::UpsertContact(contact) => {
-                let mut contacts = self.contacts.borrow_mut();
-                contacts.insert(contact.public_key.clone(), contact);
+            }
+            DBReply::Contacts(new_contacts) => {
+                {
+                    let mut contacts = self.contacts.borrow_mut();
+                    contacts.clear();
+
+                    for c in new_contacts {
+                        let public_key = c.public_key.clone();
+                        contacts.insert(public_key, c);
+                    }
+                }
                 self.contacts_changed();
             }
         }
@@ -93,15 +98,28 @@ impl HoshiClient {
         f(&contacts);
     }
 
-    pub fn contacts_watch<F>(&mut self, f: F)
+    pub fn contacts_watch<F>(&self, f: F)
     where
         F: Fn(&HashMap<String, Contact>) + 'static,
     {
-        self.contacts_watchers.push(Box::new(f));
+        let mut watchers = self.contacts_watchers.borrow_mut();
+        watchers.push(Box::new(f));
     }
 
-    pub fn contacts_get(&self, public_key: &str) -> Option<Contact> {
+    pub fn contact_get(&self, public_key: &str) -> Option<Contact> {
         self.contacts.borrow().get(public_key).map(|c| c.clone())
+    }
+
+    pub fn contact_upsert(&self, contact: Contact) -> Result<()> {
+        {
+            let mut contacts = self.contacts.borrow_mut();
+            let contact = contact.clone();
+            contacts.insert(contact.public_key.clone(), contact);
+        }
+        self.db.contact_upsert(contact)?;
+        self.contacts_changed();
+
+        Ok(())
     }
 }
 
@@ -113,7 +131,7 @@ impl std::fmt::Debug for HoshiClient {
             .field("contacts", &self.contacts)
             .field(
                 "contacts_watchers",
-                &format!("[{} watchers]", self.contacts_watchers.len()),
+                &format!("[{} watchers]", self.contacts_watchers.borrow().len()),
             )
             .finish()
     }

@@ -1,5 +1,5 @@
 use adw::{Avatar, Clamp, NavigationPage, NavigationSplitView, prelude::*};
-use gtk::{Box, Button, CenterBox, Label, ListBox, ListBoxRow, ScrolledWindow, TextView};
+use gtk::{Box, Button, CenterBox, Image, Label, ListBox, ListBoxRow, ScrolledWindow, TextView};
 use hoshi_clientlib::Contact;
 
 use crate::AppState;
@@ -45,7 +45,7 @@ fn contact_box(contact: &Contact) -> Box {
     hbox
 }
 
-fn add_contact(list: &ListBox, contact: &Contact) {
+fn add_contact(list: &ListBox, contact: &Contact) -> ListBoxRow {
     let hbox = contact_box(contact);
 
     let row = ListBoxRow::new();
@@ -53,6 +53,7 @@ fn add_contact(list: &ListBox, contact: &Contact) {
     row.set_child(Some(&hbox));
 
     list.append(&row);
+    row
 }
 
 fn view_chat_page(_state: AppState, page: NavigationPage, contact: Option<Contact>) {
@@ -172,19 +173,68 @@ fn view_chat_page(_state: AppState, page: NavigationPage, contact: Option<Contac
     }
 }
 
+fn contact_list_buttons(state: AppState) -> Box {
+    let hbox = Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .margin_top(4)
+        .margin_bottom(4)
+        .margin_start(8)
+        .margin_end(8)
+        .build();
+    hbox.add_css_class("contact-buttons");
+
+    let add_contact = Button::builder().build();
+    let button_box = Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(4)
+        .build();
+    button_box.append(&Image::from_icon_name("contact-new-symbolic"));
+    button_box.append(&Label::new(Some("New Contact")));
+    add_contact.set_child(Some(&button_box));
+    hbox.append(&add_contact);
+
+    {
+        let state = state.clone();
+        add_contact.connect_clicked(move |_| {
+            let contact = Contact::placeholder_contact();
+            state
+                .client
+                .contact_upsert(contact)
+                .expect("Couldn't create new contact");
+        });
+    }
+
+    hbox
+}
+
 fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPage) {
-    let wrap = ScrolledWindow::builder().build();
+    let vbox = Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+
+    vbox.add_css_class("bg-darken");
+
+    let wrap = ScrolledWindow::builder().vexpand(true).build();
     let list = ListBox::builder()
         .selection_mode(gtk::SelectionMode::Single)
         .build();
+    list.add_css_class("bg-transparent");
 
-    {   
+    {
         let list = list.clone().downgrade();
-        state.client.with_contacts(move |contacts| {
+        state.client.contacts_watch(move |contacts| {
+            // More efficient diffing would be nice in the future, good enough for an MVP though
             if let Some(list) = list.upgrade() {
+                let selected = list.selected_row().map(|r| r.widget_name().to_string());
+                list.remove_all();
                 for contact in contacts.values() {
-                    add_contact(&list, contact);
-                } 
+                    let row = add_contact(&list, contact);
+                    if let Some(selected) = &selected {
+                        if &contact.public_key == selected {
+                            row.activate();
+                        }
+                    }
+                }
             }
         });
     }
@@ -193,7 +243,7 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
         let state = state.clone();
         list.connect_row_activated(move |_, row| {
             let key = row.widget_name().to_string();
-            if let Some(contact) = state.client.contacts_get(&key) {
+            if let Some(contact) = state.client.contact_get(&key) {
                 view_chat_page(state.clone(), chat.clone(), Some(contact));
             } else {
                 view_chat_page(state.clone(), chat.clone(), None);
@@ -210,7 +260,10 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
     });
 
     wrap.set_child(Some(&list));
-    page.set_child(Some(&wrap));
+    let button_box = contact_list_buttons(state);
+    vbox.append(&wrap);
+    vbox.append(&button_box);
+    page.set_child(Some(&vbox));
 }
 
 pub fn view_contact_list(state: AppState) {
