@@ -923,6 +923,7 @@ dependencies = [
  "base64",
  "glib",
  "gtk4",
+ "hoshi-clientlib",
  "libadwaita",
 ]
 
@@ -933,8 +934,8 @@ dependencies = [
  "anyhow",
  "dirs",
  "reqwest",
+ "rusqlite",
  "tokio",
- "tokio-rusqlite",
 ]
 
 [[package]]

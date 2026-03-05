@@ -1,5 +1,6 @@
 use base64::prelude::*;
-use std::collections::HashMap;
+use hoshi_clientlib::HoshiClient;
+use std::{collections::HashMap, rc::Rc, time::Duration};
 
 use adw::{Application, ApplicationWindow, HeaderBar, NavigationView, ToolbarView, prelude::*};
 use gtk::CssProvider;
@@ -44,6 +45,7 @@ pub struct AppState {
     pub toolbar: ToolbarView,
     pub win: ApplicationWindow,
 
+    pub client: Rc<HoshiClient>,
     pub contacts: HashMap<String, Contact>,
 }
 
@@ -103,6 +105,19 @@ impl AppState {
         ])
     }
 
+    fn spawn_client_handler_future(&self) {
+        let client = self.client.clone();
+        glib::spawn_future_local(
+            async move {
+                let msgs = client.step();
+                // Adaptable timeout, make sure we don't poll as often if there
+                // are no messages in the mpsc
+                let millis = if msgs == 0 { 8 } else { 64 };
+                glib::timeout_future(Duration::from_millis(millis)).await;
+            }
+        );
+    }
+
     pub fn start(app: Application) {
         force_dark_mode();
         add_css();
@@ -137,6 +152,7 @@ impl AppState {
         // Get rid of 5px padding
         win.remove_css_class("solid-csd");
 
+        let client = HoshiClient::new().expect("Couldn't create HoshiClient");
         let contacts = Self::placeholder_contacts();
 
         let state = Self {
@@ -145,8 +161,10 @@ impl AppState {
             header,
             toolbar,
             win: win.clone(),
+            client: Rc::new(client),
             contacts,
         };
+        state.spawn_client_handler_future();
         {
             let state = state.clone();
             settings_btn.connect_clicked(move |btn| {

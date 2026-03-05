@@ -15,7 +15,7 @@ anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 dashmap = "6"
 serde_json = "1"
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 tokio-rusqlite = { version = "0.7", features = ["bundled"] }
 argon2 = "0.5"
 rand_core = { version = "0.6", features = ["std"] }

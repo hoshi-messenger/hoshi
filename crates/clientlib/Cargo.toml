@@ -7,6 +7,6 @@ edition = "2024"
 anyhow = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
-tokio-rusqlite = { workspace = true }
+rusqlite = { workspace = true }
 dirs = { workspace = true }
 
