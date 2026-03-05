@@ -52,7 +52,41 @@ fn add_css() {
         }}
 
         .bg-darken {{
-            background: rgba(0,0,0,0.2);
+            background: rgba(0,0,0,0.4);
+        }}
+
+        .bg-lighten {{
+            background: rgba(255,255,255,0.15);
+        }}
+
+        .wide-avatar .heading {{
+            font-size: 1.8em;
+        }}
+
+        .message-input-frame {{
+            border-radius: 18px;
+            border: none;
+            background: rgba(0,0,0,0.33);
+            padding: 0 8px;
+            box-shadow: none;
+        }}
+
+        .message-input {{
+            background: transparent;
+            border-radius: 18px;
+            box-shadow: none;
+        }}
+
+        .message-send-btn {{
+            background: transparent;
+            border: none;
+            border-radius: 18px;
+            margin: 4px;
+            padding: 4px;
+        }}
+
+        .message-send-btn:hover {{
+            background: alpha(@accent_color, 0.2);
         }}
     "
     ));
@@ -75,7 +109,7 @@ impl AppState {
             let msgs = client.step();
             // Adaptable timeout, make sure we don't poll as often if there
             // are no messages in the mpsc
-            let millis = if msgs == 0 { 8 } else { 64 };
+            let millis = if msgs == 0 { 4 } else { 64 };
             glib::timeout_future(Duration::from_millis(millis)).await;
         });
     }

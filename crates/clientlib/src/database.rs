@@ -7,23 +7,25 @@ use std::{
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::Contact;
+use crate::{ChatMessage, Contact};
 
 #[derive(Debug, Clone)]
 enum DBMessage {
-    Ping,
     Kill,
 
     ContactsGet,
     ContactUpsert(Contact),
     ContactDelete { public_key: String },
+
+    MessagesGet,
+    MessageUpsert(ChatMessage),
 }
 
 #[derive(Debug, Clone)]
 pub enum DBReply {
-    Pong,
     Shutdown,
     Contacts(Vec<Contact>),
+    Messages(Vec<ChatMessage>),
 }
 
 #[derive(Debug)]
@@ -52,6 +54,16 @@ impl Database {
                     "
                 PRAGMA journal_mode=WAL;
 
+                CREATE TABLE IF NOT EXISTS chat (
+                    id TEXT PRIMARY KEY,
+                    created_at INTEGER NOT NULL,
+                    from_key TEXT NOT NULL,
+                    to_key TEXT NOT NULL,
+                    content TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_from_key ON chat(from_key);
+                CREATE INDEX IF NOT EXISTS idx_chat_to_key ON chat(to_key);
+
                 CREATE TABLE IF NOT EXISTS contact (
                     public_key TEXT PRIMARY KEY,
                     alias TEXT,
@@ -70,10 +82,6 @@ impl Database {
                 loop {
                     if let Ok(msg) = rx.recv() {
                         match msg {
-                            DBMessage::Ping => {
-                                tx.send(DBReply::Pong)
-                                    .expect("DB couldn't send pong msg to client");
-                            }
                             DBMessage::Kill => {
                                 tx.send(DBReply::Shutdown)
                                     .expect("DB couldn't send shutdown msg to client");
@@ -98,10 +106,9 @@ impl Database {
                                 .expect("Error upserting contact");
                             }
                             DBMessage::ContactsGet => {
-                                let mut stmt = conn.prepare(
-                                "SELECT public_key, alias FROM contact ORDER BY last_seen DESC"
-                            ).expect("Error preparing contacts query");
-
+                                let mut stmt = conn
+                                    .prepare("SELECT public_key, alias FROM contact")
+                                    .expect("Error preparing contacts query");
                                 let contacts = stmt
                                     .query_map([], |row| {
                                         Ok(Contact {
@@ -116,6 +123,43 @@ impl Database {
                                 tx.send(DBReply::Contacts(contacts))
                                     .expect("DB couldn't send contacts to client");
                             }
+                            DBMessage::MessagesGet => {
+                                let mut stmt = conn.prepare(
+                                "SELECT id, created_at, from_key, to_key, content FROM chat"
+                                ).expect("Error preparing chat query");
+                                let messages = stmt
+                                    .query_map([], |row| {
+                                        Ok(ChatMessage::new(
+                                            row.get(0)?,
+                                            row.get(1)?,
+                                            row.get(2)?,
+                                            row.get(3)?,
+                                            row.get(4)?,
+                                        ))
+                                    })
+                                    .expect("Error querying contacts")
+                                    .filter_map(|r| r.ok())
+                                    .collect();
+
+                                tx.send(DBReply::Messages(messages))
+                                    .expect("DB couldn't send chat messages to client");
+                            }
+                            DBMessage::MessageUpsert(msg) => {
+                                conn.execute(
+                                    "INSERT INTO chat (id, created_at, from_key, to_key, content)
+                                VALUES (?1, ?2, ?3, ?4, ?5)
+                                ON CONFLICT(id) DO UPDATE SET
+                                    content = excluded.content",
+                                    rusqlite::params![
+                                        msg.id,
+                                        msg.created_at,
+                                        msg.from,
+                                        msg.to,
+                                        msg.content
+                                    ],
+                                )
+                                .expect("Error upserting chat");
+                            }
                         }
                     }
                 }
@@ -129,8 +173,13 @@ impl Database {
         })
     }
 
-    pub fn ping(&self) -> Result<()> {
-        self.tx.send(DBMessage::Ping)?;
+    pub fn messages_get(&self) -> Result<()> {
+        self.tx.send(DBMessage::MessagesGet)?;
+        Ok(())
+    }
+
+    pub fn message_upsert(&self, msg: ChatMessage) -> Result<()> {
+        self.tx.send(DBMessage::MessageUpsert(msg))?;
         Ok(())
     }
 

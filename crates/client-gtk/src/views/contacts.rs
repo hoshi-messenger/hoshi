@@ -1,12 +1,144 @@
-use adw::{Avatar, Clamp, NavigationPage, NavigationSplitView, prelude::*};
-use gtk::{Box, Button, CenterBox, Image, Label, ListBox, ListBoxRow, ScrolledWindow, TextView};
+use adw::{ApplicationWindow, Avatar, Clamp, NavigationPage, NavigationSplitView, prelude::*};
+use gtk::{Box, Button, Entry, Image, Label, ListBox, ListBoxRow, ScrolledWindow, TextView};
 use hoshi_clientlib::Contact;
 
 use crate::AppState;
 
-fn contact_box(state: AppState, contact: &Contact) -> Box {
+fn show_add_contact_dialog(parent: &ApplicationWindow, state: AppState) {
+    let dialog = adw::AlertDialog::new(Some("New Contact"), None);
+
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(8)
+        .build();
+
+    let public_key_entry = Entry::builder().placeholder_text("Public Key").build();
+
+    let alias_entry = Entry::builder()
+        .placeholder_text("Alias (optional)")
+        .build();
+
+    vbox.append(&public_key_entry);
+    vbox.append(&alias_entry);
+
+    dialog.set_extra_child(Some(&vbox));
+
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("add", "Add");
+    dialog.set_default_response(Some("add"));
+    dialog.set_response_appearance("add", adw::ResponseAppearance::Suggested);
+
+    public_key_entry.set_activates_default(true);
+    alias_entry.set_activates_default(true);
+
+    dialog.connect_response(None, move |dialog, response| {
+        if response == "add" {
+            let public_key = public_key_entry.text().to_string();
+            let alias = alias_entry.text().to_string();
+            if !public_key.is_empty() {
+                let alias = if alias.is_empty() { None } else { Some(alias) };
+                let contact = Contact::new(public_key, alias);
+                state
+                    .client
+                    .contact_upsert(contact)
+                    .expect("Couldn't add contact");
+            }
+        }
+        dialog.close();
+    });
+
+    dialog.present(Some(parent));
+}
+
+fn show_edit_contact_dialog(parent: &ApplicationWindow, state: AppState, contact: &Contact) {
+    let dialog = adw::AlertDialog::new(Some("Edit Contact"), None);
+
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(8)
+        .build();
+
+    let public_key_entry = Entry::builder()
+        .text(&contact.public_key)
+        .editable(false)
+        .sensitive(false)
+        .build();
+
+    let alias_entry = Entry::builder()
+        .text(&contact.alias)
+        .placeholder_text("Alias (optional)")
+        .build();
+
+    alias_entry.connect_map(|alias| {
+        alias.grab_focus();
+    });
+
+    vbox.append(&public_key_entry);
+    vbox.append(&alias_entry);
+
+    dialog.set_extra_child(Some(&vbox));
+
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("save", "Save");
+    dialog.set_default_response(Some("save"));
+    dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+
+    alias_entry.set_activates_default(true);
+
+    let public_key = contact.public_key.clone();
+    dialog.connect_response(None, move |dialog, response| {
+        if response == "save" {
+            let alias = alias_entry.text().to_string();
+            let alias = if alias.is_empty() { None } else { Some(alias) };
+            let contact = Contact::new(public_key.clone(), alias);
+            state
+                .client
+                .contact_upsert(contact)
+                .expect("Couldn't update contact");
+        }
+        dialog.close();
+    });
+
+    dialog.present(Some(parent));
+}
+
+fn show_delete_contact_dialog(parent: &ApplicationWindow, state: AppState, public_key: &str) {
+    if let Some(contact) = state.client.contact_get(public_key) {
+        let dialog = adw::AlertDialog::new(
+            Some("Delete Contact"),
+            Some(&format!(
+                "Are you sure you want to delete {}?",
+                contact.alias
+            )),
+        );
+
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("delete", "Delete");
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+
+        let public_key = contact.public_key.clone();
+        dialog.connect_response(None, move |dialog, response| {
+            if response == "delete" {
+                state
+                    .client
+                    .contact_delete(&public_key)
+                    .expect("Couldn't delete contact");
+            }
+            dialog.close();
+        });
+
+        dialog.present(Some(parent));
+    };
+}
+
+fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Box {
+    let avatar_size = if wide_view { 64 } else { 40 };
+
     let avatar = Avatar::builder()
-        .size(40)
+        .size(avatar_size)
         .margin_start(8)
         .margin_end(8)
         .margin_top(8)
@@ -32,8 +164,9 @@ fn contact_box(state: AppState, contact: &Contact) -> Box {
     let vbox = Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .valign(gtk::Align::Center)
-        .margin_end(8)
-        .vexpand(true)
+        .margin_start(4)
+        .margin_end(4)
+        .hexpand(true)
         .build();
     vbox.append(&alias_label);
     vbox.append(&key_label);
@@ -44,25 +177,42 @@ fn contact_box(state: AppState, contact: &Contact) -> Box {
     hbox.append(&avatar);
     hbox.append(&vbox);
 
-    let delete_button = Button::from_icon_name("user-trash-symbolic");
-    delete_button.add_css_class("flat");
-    {
-        let state = state.clone();
-        let public_key = contact.public_key.clone();
-        delete_button.connect_clicked(move |_| {
-            state
-                .client
-                .contact_delete(&public_key)
-                .expect("Couldn't delete contact");
-        });
+    if wide_view {
+        hbox.add_css_class("wide-avatar");
+
+        let edit_button = create_icon_button("document-edit-symbolic", "Edit");
+        edit_button.add_css_class("flat");
+        {
+            let state = state.clone();
+            let contact = contact.clone();
+            edit_button.connect_clicked(move |_| {
+                show_edit_contact_dialog(&state.win, state.clone(), &contact);
+            });
+        }
+        hbox.append(&edit_button);
+
+        let delete_button = create_icon_button("user-trash-symbolic", "Delete");
+        delete_button.add_css_class("flat");
+        {
+            let state = state.clone();
+            let public_key = contact.public_key.clone();
+            delete_button.connect_clicked(move |_| {
+                show_delete_contact_dialog(&state.win, state.clone(), &public_key);
+            });
+        }
+        hbox.append(&delete_button);
     }
-    hbox.append(&delete_button);
 
     hbox
 }
 
-fn add_contact(state: AppState, list: &ListBox, contact: &Contact) -> ListBoxRow {
-    let hbox = contact_box(state, contact);
+fn add_contact_row(
+    state: AppState,
+    list: &ListBox,
+    contact: &Contact,
+    wide_view: bool,
+) -> ListBoxRow {
+    let hbox = create_contact_box(state, contact, wide_view);
 
     let row = ListBoxRow::new();
     row.set_widget_name(&contact.public_key);
@@ -74,34 +224,48 @@ fn add_contact(state: AppState, list: &ListBox, contact: &Contact) -> ListBoxRow
 
 fn view_chat_page(state: AppState, page: NavigationPage, contact: Option<Contact>) {
     if let Some(contact) = contact {
-        let center_box = CenterBox::builder()
+        let center_box = Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
 
         let top_bar = Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .build();
+        top_bar.add_css_class("bg-lighten");
 
-        let contact_info = contact_box(state, &contact);
+        let contact_info = create_contact_box(state, &contact, true);
         top_bar.append(&contact_info);
-        center_box.set_start_widget(Some(&top_bar));
+        center_box.append(&top_bar);
 
         let bottom_clamp = Clamp::builder().maximum_size(600).build();
+        bottom_clamp.add_css_class("bg-lighten");
 
         let bottom_box = Box::builder()
             .orientation(gtk::Orientation::Horizontal)
+            .margin_top(4)
             .margin_bottom(4)
             .build();
         bottom_clamp.set_child(Some(&bottom_box));
+
+        let input_frame = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .margin_top(4)
+            .margin_bottom(4)
+            .build();
+        input_frame.add_css_class("message-input-frame");
 
         let message_input = TextView::builder()
             .wrap_mode(gtk::WrapMode::WordChar)
             .accepts_tab(false)
             .left_margin(8)
-            .right_margin(8)
+            .right_margin(4)
+            .top_margin(8)
+            .bottom_margin(8)
             .hexpand(true)
             .build();
-        message_input.connect_realize(|msg_input| {
+        message_input.add_css_class("message-input");
+        message_input.set_size_request(-1, 36);
+        message_input.connect_map(|msg_input| {
             msg_input.grab_focus();
         });
 
@@ -125,18 +289,19 @@ fn view_chat_page(state: AppState, page: NavigationPage, contact: Option<Contact
         }
         message_input.add_controller(key_controller);
 
-        bottom_box.append(&message_input);
-
         let send_btn = Button::builder()
             .icon_name("mail-send-symbolic")
-            .valign(gtk::Align::End) // pin to bottom as input grows
+            .valign(gtk::Align::Start)
             .build();
-        bottom_box.append(&send_btn);
+        send_btn.add_css_class("flat");
+        send_btn.add_css_class("message-send-btn");
 
-        center_box.set_end_widget(Some(&bottom_clamp));
+        input_frame.append(&message_input);
+        input_frame.append(&send_btn);
+        bottom_box.append(&input_frame);
 
         let scroll = ScrolledWindow::builder().vexpand(true).build();
-        scroll.add_css_class("chat-background");
+        center_box.add_css_class("chat-background");
 
         let clamp = Clamp::builder().maximum_size(600).build();
 
@@ -170,7 +335,8 @@ fn view_chat_page(state: AppState, page: NavigationPage, contact: Option<Contact
         clamp.set_child(Some(&vbox));
         scroll.set_child(Some(&clamp));
 
-        center_box.set_center_widget(Some(&scroll));
+        center_box.append(&scroll);
+        center_box.append(&bottom_clamp);
 
         page.set_child(Some(&center_box));
     } else {
@@ -189,6 +355,18 @@ fn view_chat_page(state: AppState, page: NavigationPage, contact: Option<Contact
     }
 }
 
+fn create_icon_button(icon: &str, label: &str) -> Button {
+    let button = Button::builder().valign(gtk::Align::Center).build();
+    let button_box = Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(4)
+        .build();
+    button_box.append(&Image::from_icon_name(icon));
+    button_box.append(&Label::new(Some(label)));
+    button.set_child(Some(&button_box));
+    button
+}
+
 fn contact_list_buttons(state: AppState) -> Box {
     let hbox = Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -199,25 +377,11 @@ fn contact_list_buttons(state: AppState) -> Box {
         .build();
     hbox.add_css_class("contact-buttons");
 
-    let add_contact = Button::builder().build();
-    let button_box = Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(4)
-        .build();
-    button_box.append(&Image::from_icon_name("contact-new-symbolic"));
-    button_box.append(&Label::new(Some("New Contact")));
-    add_contact.set_child(Some(&button_box));
+    let add_contact = create_icon_button("contact-new-symbolic", "New Contact");
     hbox.append(&add_contact);
-
     {
         let state = state.clone();
-        add_contact.connect_clicked(move |_| {
-            let contact = Contact::placeholder_contact();
-            state
-                .client
-                .contact_upsert(contact)
-                .expect("Couldn't create new contact");
-        });
+        add_contact.connect_clicked(move |_| show_add_contact_dialog(&state.win, state.clone()));
     }
 
     hbox
@@ -251,7 +415,7 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
                 sorted_contacts.sort_by(|a, b| a.public_key.cmp(&b.public_key));
 
                 for contact in &sorted_contacts {
-                    let row = add_contact(state.clone(), &list, contact);
+                    let row = add_contact_row(state.clone(), &list, contact, false);
                     if let Some(selected) = &selected {
                         if &contact.public_key == selected {
                             row.activate();

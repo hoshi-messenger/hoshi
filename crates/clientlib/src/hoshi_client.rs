@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap};
 
 use anyhow::Result;
 
-use crate::{Contact, Database, HoshiNetClient, database::DBReply};
+use crate::{ChatMessage, Contact, Database, HoshiNetClient, database::DBReply};
 
 pub struct HoshiClient {
     pub net: HoshiNetClient,
@@ -11,6 +11,8 @@ pub struct HoshiClient {
 
     contacts: RefCell<HashMap<String, Contact>>,
     contacts_watchers: RefCell<Vec<Box<dyn Fn(&HashMap<String, Contact>)>>>,
+
+    messages: RefCell<HashMap<String, Vec<ChatMessage>>>,
 }
 
 impl HoshiClient {
@@ -20,17 +22,19 @@ impl HoshiClient {
         std::fs::create_dir_all(&path)?;
         let path = path.join("client.sqlite3");
         let db = Database::new(path)?;
-        db.ping()?;
         db.contacts_get()?;
+        db.messages_get()?;
 
         let contacts = RefCell::new(HashMap::new());
         let contacts_watchers = RefCell::new(vec![]);
+        let messages = RefCell::new(HashMap::new());
 
         Ok(Self {
             net,
             db,
             contacts,
             contacts_watchers,
+            messages,
         })
     }
 
@@ -44,11 +48,8 @@ impl HoshiClient {
 
     fn handle_db_msg(&self, msg: DBReply) {
         match msg {
-            DBReply::Pong => {
-                println!("Client/DB: Pong");
-            }
             DBReply::Shutdown => {
-                println!("Client/DB: Shutdown");
+                panic!("Client/DB: Shutdown - we should never receive this!");
             }
             DBReply::Contacts(new_contacts) => {
                 {
@@ -62,6 +63,7 @@ impl HoshiClient {
                 }
                 self.contacts_changed();
             }
+            DBReply::Messages(_msgs) => {}
         }
     }
 
