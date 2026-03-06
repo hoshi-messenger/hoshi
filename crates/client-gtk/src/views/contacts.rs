@@ -1,5 +1,7 @@
 use adw::{ApplicationWindow, Avatar, Clamp, NavigationPage, NavigationSplitView, prelude::*};
-use gtk::{Box, Button, Entry, Image, Label, ListBox, ListBoxRow, ScrolledWindow, TextView};
+use gtk::{
+    Box, Button, Entry, Image, Label, ListBox, ListBoxRow, MenuButton, ScrolledWindow, TextView,
+};
 use hoshi_clientlib::{ChatMessage, Contact};
 
 use crate::AppState;
@@ -274,31 +276,24 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
         msg_input.grab_focus();
     });
 
-    let key_controller = gtk::EventControllerKey::new();
+    let emoji_chooser = gtk::EmojiChooser::new();
+    let emoji_btn = MenuButton::builder()
+        .icon_name("face-smile-symbolic")
+        .valign(gtk::Align::Start)
+        .margin_top(4)
+        .popover(&emoji_chooser) // set via builder directly
+        .build();
+    emoji_btn.add_css_class("flat");
     {
-        let state = state.clone();
-        let contact = contact.clone();
         let message_input = message_input.clone();
-        key_controller.connect_key_pressed(move |_, key, _, modifiers| {
-            if key == gtk::gdk::Key::Return
-                && !modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK)
-            {
-                let buffer = message_input.buffer();
-                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
-                if !text.is_empty() {
-                    let from = state.client.public_key();
-                    let to = contact.public_key.clone();
-                    let content = text.to_string();
-                    let msg = ChatMessage::create(from, to, content);
-                    state.client.message_upsert(msg).expect("Couldn't send msg");
-                    buffer.set_text("");
-                }
-                return glib::Propagation::Stop;
-            }
-            glib::Propagation::Proceed
+        emoji_chooser.connect_emoji_picked(move |_, emoji| {
+            message_input.buffer().insert_at_cursor(emoji);
+            let message_input = message_input.clone();
+            glib::idle_add_local_once(move || {
+                message_input.grab_focus();
+            });
         });
     }
-    message_input.add_controller(key_controller);
 
     let send_btn = Button::builder()
         .icon_name("mail-send-symbolic")
@@ -307,6 +302,41 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
     send_btn.add_css_class("flat");
     send_btn.add_css_class("message-send-btn");
 
+    {
+        let state = state.clone();
+        let contact = contact.clone();
+        let message_input = message_input.clone();
+        let send_btn = send_btn.clone();
+        send_btn.connect_clicked(move |_| {
+            let buffer = message_input.buffer();
+            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+            if !text.is_empty() {
+                let from = state.client.public_key();
+                let to = contact.public_key.clone();
+                let content = text.to_string();
+                let msg = ChatMessage::create(from, to, content);
+                state.client.message_upsert(msg).expect("Couldn't send msg");
+                buffer.set_text("");
+            }
+        });
+    }
+
+    let key_controller = gtk::EventControllerKey::new();
+    {
+        let send_btn = send_btn.clone();
+        key_controller.connect_key_pressed(move |_, key, _, modifiers| {
+            if key == gtk::gdk::Key::Return
+                && !modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK)
+            {
+                send_btn.emit_clicked();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+    }
+    message_input.add_controller(key_controller);
+
+    input_frame.append(&emoji_btn);
     input_frame.append(&message_input);
     input_frame.append(&send_btn);
     bottom_box.append(&input_frame);

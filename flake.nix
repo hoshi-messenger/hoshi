@@ -66,6 +66,7 @@
 
                 buildInputs = runtimeLibs;
                 LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
+                GSETTINGS_SCHEMA_DIR = "${pkgs.gtk4}/share/gsettings-schemas/${pkgs.gtk4.name}/glib-2.0/schemas";
 
                 RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
                 RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
