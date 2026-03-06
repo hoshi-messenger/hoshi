@@ -25,7 +25,9 @@ ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 x25519-dalek = "2"
 base64 = "0.22"
 snow = "0.9"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest-websocket = "0.4"
+futures = "0.3"
 tower-http = { version = "0.6", features = ["trace"] }
 dirs = "6"
 sd-notify = "0.4"
@@ -33,6 +35,7 @@ tempfile = "3"
 toml = "1"
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
+rmp-serde = "1"
 adw = { package = "libadwaita", version = "0.9", features = ["v1_8"]}
 glib = "0.22"
 gtk = { package = "gtk4", version = "0.11", features = ["v4_18"]}

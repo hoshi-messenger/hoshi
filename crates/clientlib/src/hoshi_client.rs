@@ -5,12 +5,16 @@ use std::{
 
 use anyhow::Result;
 
-use crate::{ChatMessage, Contact, Database, HoshiNetClient, database::DBReply};
+use crate::{
+    ChatMessage, Contact, Database, HoshiNetClient, RelayInfo,
+    database::DBReply,
+    hoshi_net_client::{HoshiMessage, HoshiPayload},
+};
 
 pub struct HoshiClient {
-    pub net: HoshiNetClient,
-
+    net: HoshiNetClient,
     db: Database,
+    relay_list: RefCell<Vec<RelayInfo>>,
 
     contacts: RefCell<HashMap<String, Contact>>,
     contacts_watchers: RefCell<Vec<Box<dyn Fn(&HashMap<String, Contact>)>>>,
@@ -29,14 +33,22 @@ impl HoshiClient {
         db.contacts_get()?;
         db.messages_get()?;
 
+        let relay_list = RefCell::new(vec![RelayInfo::new("ws://127.0.0.1:2700/".to_string())]);
         let contacts = RefCell::new(HashMap::new());
         let contacts_watchers = RefCell::new(vec![]);
         let messages = RefCell::new(HashMap::new());
         let messages_watchers = RefCell::new(vec![]);
 
+        {
+            let relay_list = relay_list.borrow();
+            net.update_relays(&relay_list);
+        }
+        net.set_public_key("asdqwe".to_string());
+
         Ok(Self {
             net,
             db,
+            relay_list,
             contacts,
             contacts_watchers,
             messages,
@@ -109,6 +121,15 @@ impl HoshiClient {
     /// every 8ms/64ms depending on whether the last call actually handled
     /// any messages.
     pub fn step(&self) -> u32 {
+        for net_msg in self.net.step() {
+            if let HoshiPayload::ChatMessage(chat_msg) = net_msg.payload {
+                let chat_id = chat_msg.chat_id();
+                self.save_chat_message(chat_msg.clone());
+                let _ = self.db.message_upsert(chat_msg);
+                self.messages_changed(chat_id);
+            }
+        }
+
         let mut msgs = 0;
 
         // Only handle at most 32 msgs per iteration, make sure the
@@ -147,7 +168,12 @@ impl HoshiClient {
     pub fn message_upsert(&self, msg: ChatMessage) -> Result<()> {
         let chat_id = msg.chat_id();
         self.save_chat_message(msg.clone());
-        self.db.message_upsert(msg)?;
+        self.db.message_upsert(msg.clone())?;
+        self.net.send(HoshiMessage::new(
+            self.public_key(),
+            msg.to.clone(),
+            HoshiPayload::ChatMessage(msg),
+        ));
         self.messages_changed(chat_id);
 
         Ok(())
@@ -158,6 +184,7 @@ impl HoshiClient {
     /// be left empty to get notified about all messages.
     /// Your callback f gets called immediately on registering with a
     /// current snapshot and then additionally whenever a message changes.
+    #[inline]
     pub fn messages_watch<F>(&self, filter: String, f: F)
     where
         F: Fn(&str, &HashMap<String, ChatMessage>) + 'static,
@@ -182,6 +209,7 @@ impl HoshiClient {
     }
 
     /// Call f with a current snapshot of the current contacts once
+    #[inline]
     pub fn with_contacts<F>(&self, f: F)
     where
         F: FnOnce(&HashMap<String, Contact>) + 'static,
@@ -193,6 +221,7 @@ impl HoshiClient {
     /// Use this function so that f gets called whenever a contact changes.
     /// Also gets called once immediately with a current snapshot of the local
     /// state.
+    #[inline]
     pub fn contacts_watch<F>(&self, f: F)
     where
         F: Fn(&HashMap<String, Contact>) + 'static,
@@ -204,6 +233,7 @@ impl HoshiClient {
     }
 
     /// Lookup a particular public_key in the current snapshot of Contancts
+    #[inline]
     pub fn contact_get(&self, public_key: &str) -> Option<Contact> {
         self.contacts.borrow().get(public_key).map(|c| c.clone())
     }
@@ -241,7 +271,6 @@ impl HoshiClient {
 impl std::fmt::Debug for HoshiClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HoshiClient")
-            .field("net", &self.net)
             .field("db", &self.db)
             .field("contacts", &self.contacts)
             .field(

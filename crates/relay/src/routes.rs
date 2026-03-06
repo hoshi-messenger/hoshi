@@ -2,13 +2,15 @@ use axum::{
     Json,
     extract::{
         State, WebSocketUpgrade,
-        ws::{WebSocket, rejection::WebSocketUpgradeRejection},
+        ws::{Message as WsMessage, WebSocket, rejection::WebSocketUpgradeRejection},
     },
     http::{HeaderMap, Method, StatusCode},
     response::{Html, IntoResponse},
 };
+use futures::{SinkExt, StreamExt};
+use hoshi_clientlib::HoshiEnvelope;
 
-use crate::{ServerState, api};
+use crate::{ServerState, api, connection::HoshiConnection};
 
 #[axum::debug_handler]
 pub async fn index_route(
@@ -18,9 +20,21 @@ pub async fn index_route(
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
 ) -> impl IntoResponse {
     match ws {
-        Ok(upgrade) => upgrade.on_upgrade(async move |mut socket| {
-            handle_ws(state, socket).await;
-        }),
+        Ok(upgrade) => {
+            let client_key = headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .map(|s| s.to_string());
+
+            let Some(client_key) = client_key else {
+                return StatusCode::UNAUTHORIZED.into_response();
+            };
+
+            upgrade.on_upgrade(async move |socket| {
+                handle_ws(state, socket, client_key).await;
+            })
+        }
         Err(_) => match method {
             Method::GET => {
                 let accepts_html = headers
@@ -51,4 +65,63 @@ async fn relay_status_json(_state: ServerState) -> impl IntoResponse {
     })
 }
 
-async fn handle_ws(_state: ServerState, mut _socket: WebSocket) {}
+async fn handle_ws(state: ServerState, socket: WebSocket, client_key: String) {
+    let (mut sink, mut stream) = socket.split();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<HoshiEnvelope>(64);
+
+    let conn_id = uuid::Uuid::new_v7(uuid::Timestamp::now(uuid::NoContext));
+    state
+        .connections
+        .entry(client_key.clone())
+        .or_default()
+        .push(HoshiConnection { id: conn_id, tx });
+
+    println!("WS: [{client_key}] connected (conn {conn_id})");
+
+    loop {
+        tokio::select! {
+            // Incoming from this client's WebSocket
+            msg = stream.next() => {
+                match msg {
+                    Some(Ok(WsMessage::Binary(bytes))) => {
+                        if let Ok(envelope) = rmp_serde::from_slice::<HoshiEnvelope>(&bytes) {
+                            println!("WS: [{client_key}] -> [{}] ({} bytes)", envelope.recipient, bytes.len());
+                            if let Some(conns) = state.connections.get(&envelope.recipient) {
+                                println!("WS: routing to {} connection(s) for [{}]", conns.len(), envelope.recipient);
+                                for conn in conns.iter() {
+                                    let _ = conn.tx.try_send(envelope.clone());
+                                }
+                            } else {
+                                println!("WS: no connections found for [{}]", envelope.recipient);
+                            }
+                        } else {
+                            println!("WS: [{client_key}] failed to deserialize envelope ({} bytes)", bytes.len());
+                        }
+                    }
+                    Some(Ok(_)) => {} // ignore text/ping/pong frames
+                    _ => break,       // error or close
+                }
+            }
+            // Outgoing: envelope routed to this client by the relay
+            env = rx.recv() => {
+                match env {
+                    Some(envelope) => {
+                        println!("WS: forwarding envelope to [{client_key}] ({} payload bytes)", envelope.payload.len());
+                        if let Ok(bytes) = rmp_serde::to_vec(&envelope) {
+                            if sink.send(WsMessage::Binary(bytes.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+
+    // Cleanup: remove this connection from the map
+    if let Some(mut conns) = state.connections.get_mut(&client_key) {
+        conns.retain(|c| c.id != conn_id);
+    }
+    println!("WS: [{client_key}] disconnected (conn {conn_id})");
+}

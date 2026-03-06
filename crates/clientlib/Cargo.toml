@@ -6,7 +6,11 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 tokio = { workspace = true }
+futures = { workspace = true }
 reqwest = { workspace = true }
+reqwest-websocket = { workspace = true }
 rusqlite = { workspace = true }
 dirs = { workspace = true }
 uuid = { workspace = true }
+serde = { workspace = true }
+rmp-serde = { workspace = true }

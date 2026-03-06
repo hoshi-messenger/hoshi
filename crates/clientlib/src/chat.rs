@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Clone, Debug)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: String,
     pub created_at: i64,

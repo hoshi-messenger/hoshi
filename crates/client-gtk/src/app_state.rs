@@ -96,11 +96,13 @@ impl AppState {
     fn spawn_client_handler_future(&self) {
         let client = self.client.clone();
         glib::spawn_future_local(async move {
-            let msgs = client.step();
-            // Adaptable timeout, make sure we don't poll as often if there
-            // are no messages in the mpsc
-            let millis = if msgs == 0 { 4 } else { 64 };
-            glib::timeout_future(Duration::from_millis(millis)).await;
+            loop {
+                let msgs = client.step();
+                // Adaptable timeout, make sure we don't poll as often if there
+                // are no messages in the mpsc
+                let millis = if msgs == 0 { 64 } else { 4 };
+                glib::timeout_future(Duration::from_millis(millis)).await;
+            }
         });
     }
 

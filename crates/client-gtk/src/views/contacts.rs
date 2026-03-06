@@ -7,7 +7,7 @@ use hoshi_clientlib::{ChatMessage, Contact};
 use crate::AppState;
 
 fn show_add_contact_dialog(parent: &ApplicationWindow, state: AppState) {
-    let dialog = adw::AlertDialog::new(Some("New Contact"), None);
+    let dialog = adw::AlertDialog::builder().heading("New Contact").build();
 
     let vbox = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)

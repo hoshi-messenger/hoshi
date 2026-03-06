@@ -1,5 +1,6 @@
 pub mod api;
 mod config;
+pub(crate) mod connection;
 mod http;
 mod routes;
 mod state;

@@ -22,6 +22,9 @@ dirs = { workspace = true }
 toml = { workspace = true }
 
 hoshi-server-util = { path = "../server-util" }
+hoshi-clientlib = { path = "../clientlib" }
+rmp-serde = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
