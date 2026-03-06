@@ -49,6 +49,7 @@
                   rustc
                   cargo
                   cargo-nextest
+                  cargo-watch
                   rustfmt
                   clippy
                   rust-analyzer

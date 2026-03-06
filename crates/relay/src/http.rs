@@ -1,17 +1,9 @@
 use std::net::SocketAddr;
 
-use axum::{Router, routing::get};
+use axum::{Router, routing::any};
 use tokio::net::TcpListener;
 
-use crate::{ServerState, healthz_get, index_get, relay_ws_get};
-
-pub fn router(state: ServerState) -> Router {
-    Router::new()
-        .route("/", get(index_get))
-        .route("/healthz", get(healthz_get))
-        .route("/relay", get(relay_ws_get))
-        .with_state(state)
-}
+use crate::{ServerState, index_route};
 
 pub async fn http_server(
     state: ServerState,
@@ -19,7 +11,8 @@ pub async fn http_server(
 ) -> anyhow::Result<impl std::future::IntoFuture<Output = Result<(), std::io::Error>>> {
     let bind_addr = listener.local_addr()?;
     let process_start = state.process_start;
-    let app = router(state);
+
+    let app = Router::new().route("/", any(index_route)).with_state(state);
 
     println!(
         "[{:?}] - Hoshi relay HTTP ready on {bind_addr}",

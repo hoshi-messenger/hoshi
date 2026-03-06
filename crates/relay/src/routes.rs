@@ -1,58 +1,54 @@
 use axum::{
     Json,
-    extract::{State, WebSocketUpgrade},
-    http::{HeaderMap, StatusCode, header},
-    response::{Html, IntoResponse, Response},
+    extract::{
+        State, WebSocketUpgrade,
+        ws::{WebSocket, rejection::WebSocketUpgradeRejection},
+    },
+    http::{HeaderMap, Method, StatusCode},
+    response::{Html, IntoResponse},
 };
 
 use crate::{ServerState, api};
 
-pub async fn index_get(State(_state): State<ServerState>) -> Html<String> {
+#[axum::debug_handler]
+pub async fn index_route(
+    State(state): State<ServerState>,
+    method: Method,
+    headers: HeaderMap,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+) -> impl IntoResponse {
+    match ws {
+        Ok(upgrade) => upgrade.on_upgrade(async move |mut socket| {
+            handle_ws(state, socket).await;
+        }),
+        Err(_) => match method {
+            Method::GET => {
+                let accepts_html = headers
+                    .get("accept")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|v| v.contains("text/html"))
+                    .unwrap_or(false);
+
+                if accepts_html {
+                    relay_status_html(state).await.into_response()
+                } else {
+                    relay_status_json(state).await.into_response()
+                }
+            }
+            _ => StatusCode::METHOD_NOT_ALLOWED.into_response(),
+        },
+    }
+}
+
+async fn relay_status_html(_state: ServerState) -> impl IntoResponse {
     Html("<h1>Welcome to the Hoshi relay!</h1>".to_string())
 }
 
-pub async fn healthz_get(State(state): State<ServerState>) -> impl IntoResponse {
-    Json(api::HealthzResponse {
+async fn relay_status_json(_state: ServerState) -> impl IntoResponse {
+    Json(api::RelayStatusResponse {
         status: "ok".to_string(),
         public_key: "TEST".to_string(),
-        control_plane_uri: state.config.control_plane_uri.clone(),
     })
 }
 
-pub async fn relay_ws_get(
-    State(_state): State<ServerState>,
-    ws: WebSocketUpgrade,
-    headers: HeaderMap,
-) -> Response {
-    let Some(_token) = extract_bearer_token(&headers) else {
-        return error_response(StatusCode::UNAUTHORIZED, "missing bearer token");
-    };
-
-    ws.on_upgrade(async move |mut socket| {
-        loop {
-            let msg = socket.recv().await;
-            if let Some(Ok(msg)) = msg
-                && socket.send(msg).await.is_err()
-            {
-                break;
-            }
-        }
-    })
-    .into_response()
-}
-
-fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?;
-    let value = value.to_str().ok()?.trim();
-    let token = value.strip_prefix("Bearer ")?;
-
-    if token.trim().is_empty() {
-        return None;
-    }
-
-    Some(token.trim().to_string())
-}
-
-fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
-    (status, message.into()).into_response()
-}
+async fn handle_ws(_state: ServerState, mut _socket: WebSocket) {}

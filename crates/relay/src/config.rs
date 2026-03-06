@@ -4,31 +4,25 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub config_path: PathBuf,
     pub http_bind_address: SocketAddr,
-    pub control_plane_uri: String,
-    pub api_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 struct ConfigToml {
     http_bind_address: SocketAddr,
-    control_plane_uri: String,
-    api_key: String,
 }
 
 impl Default for ConfigToml {
     fn default() -> Self {
         Self {
             http_bind_address: default_http_bind_address(),
-            control_plane_uri: default_control_plane_uri(),
-            api_key: String::new(),
         }
     }
 }
@@ -43,24 +37,8 @@ fn default_http_bind_address() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 2700)
 }
 
-fn default_control_plane_uri() -> String {
-    if cfg!(debug_assertions) {
-        "http://127.0.0.1:2600".to_string()
-    } else {
-        "https://hoshi.wikinarau.org".to_string()
-    }
-}
-
 impl ConfigToml {
-    fn normalize(mut self) -> Self {
-        self.control_plane_uri = if self.control_plane_uri.trim().is_empty() {
-            default_control_plane_uri()
-        } else {
-            self.control_plane_uri.trim().to_string()
-        };
-
-        self.api_key = self.api_key.trim().to_string();
-
+    fn normalize(self) -> Self {
         self
     }
 }
@@ -105,18 +83,9 @@ impl Config {
             )
         })?;
 
-        if file_config.api_key.is_empty() {
-            return Err(anyhow!(
-                "missing api_key in relay config {}; set api_key and restart",
-                config_path.display()
-            ));
-        }
-
         Ok(Self {
             config_path,
             http_bind_address: file_config.http_bind_address,
-            control_plane_uri: file_config.control_plane_uri,
-            api_key: file_config.api_key,
         })
     }
 

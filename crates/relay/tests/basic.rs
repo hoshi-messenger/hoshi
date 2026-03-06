@@ -20,11 +20,10 @@ async fn basic_http_routes() {
         let healthz = api.get_healthz().await.expect("healthz response");
         assert_eq!(healthz.status(), StatusCode::OK);
         let body = healthz
-            .json::<api::HealthzResponse>()
+            .json::<api::RelayStatusResponse>()
             .await
             .expect("healthz json body");
         assert_eq!(body.status, "ok");
-        assert_eq!(body.control_plane_uri, state.config.control_plane_uri);
     })
     .await;
 }
