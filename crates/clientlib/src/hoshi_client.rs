@@ -141,6 +141,9 @@ impl HoshiClient {
         }
     }
 
+    /// Update or insert a message, prefer insertion since in the future this
+    /// function might be removed and replaced with a message_insert function,
+    /// meant as a simple way to get an MVP working.
     pub fn message_upsert(&self, msg: ChatMessage) -> Result<()> {
         let chat_id = msg.chat_id();
         self.save_chat_message(msg.clone());
@@ -150,6 +153,11 @@ impl HoshiClient {
         Ok(())
     }
 
+    /// Call this function to get notified whenever messages in a
+    /// particular chat_id as specified by filter changes, can also
+    /// be left empty to get notified about all messages.
+    /// Your callback f gets called immediately on registering with a
+    /// current snapshot and then additionally whenever a message changes.
     pub fn messages_watch<F>(&self, filter: String, f: F)
     where
         F: Fn(&str, &HashMap<String, ChatMessage>) + 'static,
@@ -173,6 +181,7 @@ impl HoshiClient {
         watchers.push((filter.to_string(), Box::new(f)));
     }
 
+    /// Call f with a current snapshot of the current contacts once
     pub fn with_contacts<F>(&self, f: F)
     where
         F: FnOnce(&HashMap<String, Contact>) + 'static,
@@ -181,6 +190,9 @@ impl HoshiClient {
         f(&contacts);
     }
 
+    /// Use this function so that f gets called whenever a contact changes.
+    /// Also gets called once immediately with a current snapshot of the local
+    /// state.
     pub fn contacts_watch<F>(&self, f: F)
     where
         F: Fn(&HashMap<String, Contact>) + 'static,
@@ -191,10 +203,14 @@ impl HoshiClient {
         watchers.push(Box::new(f));
     }
 
+    /// Lookup a particular public_key in the current snapshot of Contancts
     pub fn contact_get(&self, public_key: &str) -> Option<Contact> {
         self.contacts.borrow().get(public_key).map(|c| c.clone())
     }
 
+    /// Update or Insert a particular Contact, currently only persists in the
+    /// local DB but in the future should also propagate to other devices on the
+    /// network if they share the same user.
     pub fn contact_upsert(&self, contact: Contact) -> Result<()> {
         {
             let mut contacts = self.contacts.borrow_mut();
@@ -207,6 +223,9 @@ impl HoshiClient {
         Ok(())
     }
 
+    /// Remove a contact, for now only removes it from the local DB but should
+    /// propagate over the network to other devices sharing the same user in
+    /// the future.
     pub fn contact_delete(&self, public_key: &str) -> Result<()> {
         {
             let mut contacts = self.contacts.borrow_mut();
