@@ -35,6 +35,7 @@ fn add_css() {
             padding: 8px;
             border-radius:16px;
             margin-bottom:16px;
+            font-size: 16px;
         }}
 
         .chat-message-from-me {{
@@ -75,18 +76,7 @@ fn add_css() {
             background: transparent;
             border-radius: 18px;
             box-shadow: none;
-        }}
-
-        .message-send-btn {{
-            background: transparent;
-            border: none;
-            border-radius: 18px;
-            margin: 4px;
-            padding: 4px;
-        }}
-
-        .message-send-btn:hover {{
-            background: alpha(@accent_color, 0.2);
+            font-size: 16px;
         }}
     "
     ));

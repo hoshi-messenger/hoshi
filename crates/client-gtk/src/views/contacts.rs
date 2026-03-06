@@ -16,6 +16,9 @@ fn show_add_contact_dialog(parent: &ApplicationWindow, state: AppState) {
         .build();
 
     let public_key_entry = Entry::builder().placeholder_text("Public Key").build();
+    public_key_entry.connect_map(|public_key_entry: &Entry| {
+        public_key_entry.grab_focus();
+    });
 
     let alias_entry = Entry::builder()
         .placeholder_text("Alias (optional)")
@@ -166,8 +169,6 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
     let vbox = Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .valign(gtk::Align::Center)
-        .margin_start(4)
-        .margin_end(4)
         .hexpand(true)
         .build();
     vbox.append(&alias_label);
@@ -175,6 +176,7 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
 
     let hbox = Box::builder()
         .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
         .build();
     hbox.append(&avatar);
     hbox.append(&vbox);
@@ -280,7 +282,7 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
     let emoji_btn = MenuButton::builder()
         .icon_name("face-smile-symbolic")
         .valign(gtk::Align::Start)
-        .margin_top(4)
+        .margin_top(2)
         .popover(&emoji_chooser) // set via builder directly
         .build();
     emoji_btn.add_css_class("flat");
@@ -298,6 +300,7 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
     let send_btn = Button::builder()
         .icon_name("mail-send-symbolic")
         .valign(gtk::Align::Start)
+        .margin_top(2)
         .build();
     send_btn.add_css_class("flat");
     send_btn.add_css_class("message-send-btn");
@@ -374,6 +377,7 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
                     let label = Label::builder()
                         .css_classes([class, "chat-message"])
                         .label(&msg.content)
+                        .selectable(true)
                         .halign(if from_me {
                             gtk::Align::End
                         } else {
