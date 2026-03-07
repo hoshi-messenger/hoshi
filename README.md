@@ -1,6 +1,6 @@
 # Hoshi
 
-Monorepo of the Hoshi network/messenger.
+Monorepo of the Hoshi network/messenger. Still in early development so it's not usable as a messenger just yet.
 
 ## ToDo / Next Steps
 
@@ -24,6 +24,7 @@ a couple of them since they shouldn't take too long
 - [ ] Add timestamps before messages
 - [ ] Add timestamps only if there's a pause of more than 5 minutes between messages
 - [ ] Add an Application Icon
+- [ ] Add right/long click context menu to contacts, should show Edit/Delete options
 
 ## Long-term polish
 Those are more complicated non-essential tasks, will probably take a while until we get to them, though AI might help here.

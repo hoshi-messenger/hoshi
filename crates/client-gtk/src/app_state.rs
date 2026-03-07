@@ -41,12 +41,12 @@ fn add_css() {
         }}
 
         .chat-message-from-me {{
-            background-color: rgba(192,156,255,0.2);
+            background-color: rgba(128, 156, 255, 0.4);
             margin-left:48px;
         }}
 
         .chat-message-to-me {{
-            background-color: rgba(228,228,228,0.2);
+            background-color: rgba(56,48,72,0.4);
             margin-right:48px;
         }}
 

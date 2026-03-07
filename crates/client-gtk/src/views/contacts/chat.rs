@@ -121,7 +121,8 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
     let scroll = ScrolledWindow::builder().vexpand(true).build();
     center_box.add_css_class("chat-background");
 
-    let clamp = Clamp::builder().maximum_size(600).build();
+    // Slightly higher maximum_size than the input box due to the bubble arrows
+    let clamp = Clamp::builder().maximum_size(600 + 10 * 2).build();
 
     let vbox = Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -156,9 +157,9 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
 
                     // r, g, b, a matching the bubble CSS color
                     let (r, g, b, a) = if from_me {
-                        (192.0 / 255.0, 156.0 / 255.0, 255.0 / 255.0, 0.2_f64)
+                        (128.0 / 255.0, 156.0 / 255.0, 255.0 / 255.0, 0.4_f64)
                     } else {
-                        (228.0 / 255.0, 228.0 / 255.0, 228.0 / 255.0, 0.2_f64)
+                        (56.0 / 255.0, 48.0 / 255.0, 72.0 / 255.0, 0.4_f64)
                     };
                     let arrow = DrawingArea::builder()
                         .content_width(10)
