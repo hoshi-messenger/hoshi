@@ -1,5 +1,5 @@
 use adw::{Clamp, NavigationPage, prelude::*};
-use gtk::{Box, Button, Label, MenuButton, ScrolledWindow, TextView};
+use gtk::{Box, Button, DrawingArea, Label, MenuButton, ScrolledWindow, TextView};
 use hoshi_clientlib::{ChatMessage, Contact};
 
 use crate::AppState;
@@ -152,13 +152,57 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
                         .css_classes([class, "chat-message"])
                         .label(&msg.content)
                         .selectable(true)
+                        .build();
+
+                    // r, g, b, a matching the bubble CSS color
+                    let (r, g, b, a) = if from_me {
+                        (192.0 / 255.0, 156.0 / 255.0, 255.0 / 255.0, 0.2_f64)
+                    } else {
+                        (228.0 / 255.0, 228.0 / 255.0, 228.0 / 255.0, 0.2_f64)
+                    };
+                    let arrow = DrawingArea::builder()
+                        .content_width(10)
+                        .content_height(16)
+                        .valign(gtk::Align::End)
+                        .margin_bottom(20)
+                        .build();
+                    arrow.set_draw_func(move |_, cr, w, h| {
+                        let w = w as f64;
+                        let h = h as f64;
+                        cr.set_source_rgba(r, g, b, a);
+                        if from_me {
+                            // Start top-left, curve inward (downward first) to the tip,
+                            // then straight back up the bottom edge.
+                            cr.move_to(0.0, 0.0);
+                            cr.curve_to(0.0, h * 0.4, w * 0.5, h * 0.6, w, h * 0.9);
+                            cr.line_to(0.0, h);
+                        } else {
+                            // Mirror for received: start top-right, curve inward to tip.
+                            cr.move_to(w, 0.0);
+                            cr.curve_to(w, h * 0.4, w * 0.5, h * 0.6, 0.0, h * 0.9);
+                            cr.line_to(w, h);
+                        }
+                        cr.close_path();
+                        let _ = cr.fill();
+                    });
+
+                    let row = Box::builder()
+                        .orientation(gtk::Orientation::Horizontal)
                         .halign(if from_me {
                             gtk::Align::End
                         } else {
                             gtk::Align::Start
                         })
                         .build();
-                    vbox.append(&label);
+
+                    if from_me {
+                        row.append(&label);
+                        row.append(&arrow);
+                    } else {
+                        row.append(&arrow);
+                        row.append(&label);
+                    }
+                    vbox.append(&row);
                 }
             });
     }

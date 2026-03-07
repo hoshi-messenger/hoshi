@@ -20,7 +20,6 @@ Monorepo of the Hoshi network/messenger.
 Those aren't that important since it's just a prototype, but if there's time might implement
 a couple of them since they shouldn't take too long
 
-- [ ] Add arrows to chat bubbles
 - [ ] Show arrows in chat bubbles only if they're the last (look at Telegram)
 - [ ] Add timestamps before messages
 - [ ] Add timestamps only if there's a pause of more than 5 minutes between messages
@@ -32,3 +31,5 @@ Those are more complicated non-essential tasks, will probably take a while until
 - [ ] Build custom Emoji chooser, make it look nice on bare X11
 
 ## Completed
+
+- [X] Add arrows to chat bubbles

@@ -35,7 +35,7 @@ fn add_css() {
         .chat-message {{
             background-color: rgba(255,0,255,0.3);
             padding: 8px;
-            border-radius:16px;
+            border-radius:4px;
             margin-bottom:16px;
             font-size: 16px;
         }}
