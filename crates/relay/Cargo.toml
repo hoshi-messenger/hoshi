@@ -21,10 +21,12 @@ snow = { workspace = true }
 dirs = { workspace = true }
 toml = { workspace = true }
 
-hoshi-server-util = { path = "../server-util" }
 hoshi-clientlib = { path = "../clientlib" }
 rmp-serde = { workspace = true }
 futures = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+sd-notify = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -1105,10 +1105,10 @@ dependencies = [
  "dashmap",
  "dirs",
  "ed25519-dalek",
- "hoshi-server-util",
  "jsonwebtoken",
  "rand_core 0.6.4",
  "reqwest",
+ "sd-notify",
  "serde",
  "serde_json",
  "snow",
@@ -1131,11 +1131,11 @@ dependencies = [
  "ed25519-dalek",
  "futures",
  "hoshi-clientlib",
- "hoshi-server-util",
  "jsonwebtoken",
  "rand_core 0.6.4",
  "reqwest",
  "rmp-serde",
+ "sd-notify",
  "serde",
  "serde_json",
  "snow",
@@ -1144,14 +1144,6 @@ dependencies = [
  "toml 1.0.3+spec-1.1.0",
  "uuid",
  "x25519-dalek",
-]
-
-[[package]]
-name = "hoshi-server-util"
-version = "0.1.0"
-dependencies = [
- "sd-notify",
- "tokio",
 ]
 
 [[package]]

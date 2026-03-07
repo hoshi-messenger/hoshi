@@ -2,8 +2,7 @@
 
 use std::{future::Future, path::Path};
 
-use hoshi_relay::{Config, ServerState, run};
-use hoshi_server_util::create_http_listener;
+use hoshi_relay::{Config, ServerState, create_http_listener, run};
 use tempfile::TempDir;
 
 mod api;

@@ -4,7 +4,6 @@ members = [
     "crates/client-gtk",
     "crates/clientlib",
     "crates/relay",
-    "crates/server-util",
 ]
 resolver = "2"
 

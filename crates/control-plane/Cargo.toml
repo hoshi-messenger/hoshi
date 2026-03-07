@@ -21,7 +21,8 @@ ed25519-dalek = { workspace = true }
 dirs = { workspace = true }
 clap = { workspace = true }
 
-hoshi-server-util = { path = "../server-util" }
+[target.'cfg(target_os = "linux")'.dependencies]
+sd-notify = { workspace = true }
 
 [dev-dependencies]
 reqwest = { workspace = true }
