@@ -4,7 +4,6 @@ Monorepo of the Hoshi network/messenger. Still in early development so it's not 
 
 ## ToDo / Next Steps
 
-- [ ] Notify and sync instead of sending messages directly, on startup notify all contacts
 - [ ] Allow / Show messages from unknown people, change titleline so that instead of edit/delete we have add/block
 
 ## Backlog
@@ -34,3 +33,4 @@ Those are more complicated non-essential tasks, will probably take a while until
 ## Completed
 
 - [X] Add arrows to chat bubbles
+- [X] Notify and sync instead of sending messages directly, on startup notify all contacts

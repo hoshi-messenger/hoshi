@@ -50,8 +50,8 @@ impl HoshiClient {
             }
         };
 
-        db.contacts_get()?;
         db.messages_get()?;
+        db.contacts_get()?;
 
         let relay_list = RefCell::new(vec![RelayInfo::new("ws://127.0.0.1:2700/".to_string())]);
         let contacts = RefCell::new(HashMap::new());
@@ -74,6 +74,28 @@ impl HoshiClient {
             messages,
             messages_watchers,
         })
+    }
+
+    fn request_chat_messages(&self, contact: &Contact) {
+        let msg = HoshiMessage::new(
+            self.public_key(),
+            contact.public_key.to_string(),
+            HoshiPayload::RequestChatMessages,
+        );
+        self.net.send(msg);
+    }
+
+    fn send_chat_history(&self, public_key: &str) {
+        let chat_id = ChatMessage::calc_chat_id(public_key, &self.public_key());
+        if let Some(chat) = self.messages.borrow().get(&chat_id) {
+            for msg in chat.values() {
+                self.net.send(HoshiMessage::new(
+                    self.public_key(),
+                    public_key.to_string(),
+                    HoshiPayload::ChatMessage(msg.clone()),
+                ));
+            }
+        }
     }
 
     pub fn public_key(&self) -> String {
@@ -121,12 +143,15 @@ impl HoshiClient {
             }
             DBReply::Contacts(new_contacts) => {
                 {
-                    let mut contacts = self.contacts.borrow_mut();
-                    contacts.clear();
+                    self.contacts.borrow_mut().clear();
 
                     for c in new_contacts {
+                        if self.contact_get(&c.public_key).is_none() {
+                            self.request_chat_messages(&c);
+                            self.send_chat_history(&c.public_key);
+                        }
                         let public_key = c.public_key.clone();
-                        contacts.insert(public_key, c);
+                        self.contacts.borrow_mut().insert(public_key, c);
                     }
                 }
                 self.contacts_changed();
@@ -155,11 +180,18 @@ impl HoshiClient {
     /// any messages.
     pub fn step(&self) -> u32 {
         for net_msg in self.net.step() {
-            if let HoshiPayload::ChatMessage(chat_msg) = net_msg.payload {
-                let chat_id = chat_msg.chat_id();
-                self.save_chat_message(chat_msg.clone());
-                let _ = self.db.message_upsert(chat_msg);
-                self.messages_changed(chat_id);
+            match net_msg.payload {
+                HoshiPayload::ChatMessage(chat_msg) => {
+                    let chat_id = chat_msg.chat_id();
+                    if self.save_chat_message(chat_msg.clone()) {
+                        let _ = self.db.message_upsert(chat_msg);
+                        self.messages_changed(chat_id);
+                    }
+                }
+                HoshiPayload::RequestChatMessages => {
+                    self.send_chat_history(&net_msg.from_key);
+                }
+                _ => {}
             }
         }
 
@@ -180,17 +212,23 @@ impl HoshiClient {
         msgs
     }
 
-    fn save_chat_message(&self, msg: ChatMessage) {
+    fn save_chat_message(&self, msg: ChatMessage) -> bool {
         let chat_id = msg.chat_id();
         {
             let mut chats = self.messages.borrow_mut();
             let chat = chats.get_mut(&chat_id);
             if let Some(chat) = chat {
+                // Skip duplicate messages
+                if chat.contains_key(&msg.id) {
+                    return false;
+                }
                 chat.insert(msg.id.to_string(), msg.clone());
+                true
             } else {
                 let mut chat = HashMap::new();
                 chat.insert(msg.id.to_string(), msg.clone());
                 chats.insert(chat_id.clone(), chat);
+                true
             }
         }
     }
@@ -280,6 +318,7 @@ impl HoshiClient {
             let contact = contact.clone();
             contacts.insert(contact.public_key.clone(), contact);
         }
+        self.request_chat_messages(&contact);
         self.db.contact_upsert(contact)?;
         self.contacts_changed();
 

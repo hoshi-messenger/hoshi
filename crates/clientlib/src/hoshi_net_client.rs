@@ -226,5 +226,6 @@ impl HoshiMessage {
 pub enum HoshiPayload {
     Ping,
     Pong,
+    RequestChatMessages,
     ChatMessage(ChatMessage),
 }
