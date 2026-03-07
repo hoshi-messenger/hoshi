@@ -19,6 +19,7 @@ snow = { workspace = true }
 jsonwebtoken = { workspace = true }
 ed25519-dalek = { workspace = true }
 dirs = { workspace = true }
+clap = { workspace = true }
 
 hoshi-server-util = { path = "../server-util" }
 

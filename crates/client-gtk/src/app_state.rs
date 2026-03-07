@@ -2,6 +2,8 @@ use base64::prelude::*;
 use hoshi_clientlib::HoshiClient;
 use std::{rc::Rc, time::Duration};
 
+use crate::Args;
+
 use adw::{Application, ApplicationWindow, HeaderBar, NavigationView, ToolbarView, prelude::*};
 use gtk::CssProvider;
 
@@ -106,7 +108,7 @@ impl AppState {
         });
     }
 
-    pub fn start(app: Application) {
+    pub fn start(app: Application, args: Args) {
         force_dark_mode();
         add_css();
 
@@ -140,7 +142,7 @@ impl AppState {
         // Get rid of 5px padding
         win.remove_css_class("solid-csd");
 
-        let client = HoshiClient::new().expect("Couldn't create HoshiClient");
+        let client = HoshiClient::new(args.db_path).expect("Couldn't create HoshiClient");
 
         let state = Self {
             app,

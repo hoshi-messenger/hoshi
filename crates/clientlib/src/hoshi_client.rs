@@ -1,7 +1,10 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    path::PathBuf,
 };
+
+use rand_core::{OsRng, RngCore};
 
 use anyhow::Result;
 
@@ -14,7 +17,7 @@ use crate::{
 pub struct HoshiClient {
     net: HoshiNetClient,
     db: Database,
-    relay_list: RefCell<Vec<RelayInfo>>,
+    public_key: RefCell<String>,
 
     contacts: RefCell<HashMap<String, Contact>>,
     contacts_watchers: RefCell<Vec<Box<dyn Fn(&HashMap<String, Contact>)>>>,
@@ -24,12 +27,29 @@ pub struct HoshiClient {
 }
 
 impl HoshiClient {
-    pub fn new() -> Result<Self> {
+    pub fn new(db_path: Option<PathBuf>) -> Result<Self> {
         let net = HoshiNetClient::new();
-        let path = dirs::home_dir().unwrap().join(".hoshi");
-        std::fs::create_dir_all(&path)?;
-        let path = path.join("client.sqlite3");
+        let path = db_path.unwrap_or_else(|| {
+            let p = dirs::home_dir().unwrap().join(".hoshi");
+            std::fs::create_dir_all(&p).unwrap();
+            p.join("client.sqlite3")
+        });
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let db = Database::new(path)?;
+
+        let public_key = match db.config_get_blocking("public_key") {
+            Some(bytes) => String::from_utf8(bytes).expect("public_key config is not valid UTF-8"),
+            None => {
+                let mut bytes = [0u8; 32];
+                OsRng.fill_bytes(&mut bytes);
+                let key: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+                db.config_set("public_key", key.as_bytes().to_vec())?;
+                key
+            }
+        };
+
         db.contacts_get()?;
         db.messages_get()?;
 
@@ -43,12 +63,12 @@ impl HoshiClient {
             let relay_list = relay_list.borrow();
             net.update_relays(&relay_list);
         }
-        net.set_public_key("asdqwe".to_string());
+        net.set_public_key(public_key.clone());
 
         Ok(Self {
             net,
             db,
-            relay_list,
+            public_key: RefCell::new(public_key),
             contacts,
             contacts_watchers,
             messages,
@@ -57,7 +77,15 @@ impl HoshiClient {
     }
 
     pub fn public_key(&self) -> String {
-        "asdqwe".to_string()
+        self.public_key.borrow().clone()
+    }
+
+    pub fn set_public_key(&self, key: String) -> Result<()> {
+        self.net.set_public_key(key.clone());
+        self.net.disconnect_all();
+        self.db.config_set("public_key", key.as_bytes().to_vec())?;
+        *self.public_key.borrow_mut() = key;
+        Ok(())
     }
 
     fn contacts_changed(&self) {
@@ -85,6 +113,11 @@ impl HoshiClient {
         match msg {
             DBReply::Shutdown => {
                 panic!("Client/DB: Shutdown - we should never receive this!");
+            }
+            DBReply::Config(_) => {
+                // Config replies are consumed synchronously at startup via config_get_blocking;
+                // receiving one here would be a bug.
+                panic!("Client/DB: unexpected Config reply in step()");
             }
             DBReply::Contacts(new_contacts) => {
                 {

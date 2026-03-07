@@ -11,4 +11,5 @@ adw = { workspace = true }
 glib = { workspace = true }
 gtk = { workspace = true }
 
+clap = { workspace = true }
 hoshi-clientlib = { path = "../clientlib" }

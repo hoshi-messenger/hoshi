@@ -26,6 +26,10 @@ impl HoshiNetClient {
         *self.public_key.borrow_mut() = key;
     }
 
+    pub fn disconnect_all(&self) {
+        self.pipes.borrow_mut().clear();
+    }
+
     pub fn update_relays(&self, new_relays: &Vec<RelayInfo>) {
         let mut relay_list = self.relay_list.borrow_mut();
         relay_list.clear();

@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::{ChatMessage, Contact};
 
@@ -19,6 +19,9 @@ enum DBMessage {
 
     MessagesGet,
     MessageUpsert(ChatMessage),
+
+    ConfigGet(String),
+    ConfigSet { key: String, value: Vec<u8> },
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +29,7 @@ pub enum DBReply {
     Shutdown,
     Contacts(Vec<Contact>),
     Messages(Vec<ChatMessage>),
+    Config(Option<Vec<u8>>),
 }
 
 #[derive(Debug)]
@@ -160,6 +164,25 @@ impl Database {
                                 )
                                 .expect("Error upserting chat");
                             }
+                            DBMessage::ConfigGet(key) => {
+                                let val: Option<Vec<u8>> = conn
+                                    .query_row(
+                                        "SELECT value FROM config WHERE key = ?1",
+                                        rusqlite::params![key],
+                                        |row| row.get(0),
+                                    )
+                                    .optional()
+                                    .expect("Error querying config");
+                                tx.send(DBReply::Config(val))
+                                    .expect("DB couldn't send config reply");
+                            }
+                            DBMessage::ConfigSet { key, value } => {
+                                conn.execute(
+                                    "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
+                                    rusqlite::params![key, value],
+                                )
+                                .expect("Error setting config");
+                            }
                         }
                     }
                 }
@@ -195,6 +218,26 @@ impl Database {
 
     pub fn contact_delete(&self, public_key: String) -> Result<()> {
         self.tx.send(DBMessage::ContactDelete { public_key })?;
+        Ok(())
+    }
+
+    /// Blocking config read — only safe to call at startup before any other messages are queued.
+    pub fn config_get_blocking(&self, key: &str) -> Option<Vec<u8>> {
+        self.tx.send(DBMessage::ConfigGet(key.to_string())).unwrap();
+        match self.rx.recv().unwrap() {
+            DBReply::Config(val) => val,
+            other => panic!(
+                "Unexpected DB reply during config_get_blocking: {:?}",
+                other
+            ),
+        }
+    }
+
+    pub fn config_set(&self, key: &str, value: Vec<u8>) -> Result<()> {
+        self.tx.send(DBMessage::ConfigSet {
+            key: key.to_string(),
+            value,
+        })?;
         Ok(())
     }
 
