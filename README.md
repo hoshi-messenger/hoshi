@@ -4,12 +4,11 @@ Monorepo of the Hoshi network/messenger. Still in early development so it's not 
 
 ## ToDo / Next Steps
 
-- [ ] Allow / Show messages from unknown people, change titleline so that instead of edit/delete we have add/block
+- [ ] Audio calls, start with a Ring message, the other party may then send back an Accept/Reject message directly, once the call is open just spam the other side with regular G711 u-Law sample data and output it with rodio or something like that
+- [ ] Use snow for actual crypto
 
 ## Backlog
 
-- [ ] Audio calls, start with a Ring message, the other party may then send back an Accept/Reject message directly, once the call is open just spam the other side with regular G711 u-Law sample data and output it with rodio or something like that
-- [ ] Use snow for actual crypto
 - [ ] Work on the merkle-tree based sync with gossip support
 - [ ] Add some clientlib unit tests
 - [ ] Add some relay unit tests
@@ -19,6 +18,7 @@ Monorepo of the Hoshi network/messenger. Still in early development so it's not 
 Those aren't that important since it's just a prototype, but if there's time might implement
 a couple of them since they shouldn't take too long
 
+- [ ] Allow / Show messages from unknown people, change titleline so that instead of edit/delete we have add/block
 - [ ] Show arrows in chat bubbles only if they're the last (look at Telegram)
 - [ ] Add timestamps before messages
 - [ ] Add timestamps only if there's a pause of more than 5 minutes between messages
