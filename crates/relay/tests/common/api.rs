@@ -15,13 +15,14 @@ impl RelayApi {
     }
 
     pub async fn get_index(&self) -> reqwest::Result<reqwest::Response> {
-        self.client.get(format!("{}/", self.base_uri)).send().await
+        self.client
+            .get(format!("{}/", self.base_uri))
+            .header("Accept", "text/html")
+            .send()
+            .await
     }
 
     pub async fn get_healthz(&self) -> reqwest::Result<reqwest::Response> {
-        self.client
-            .get(format!("{}/healthz", self.base_uri))
-            .send()
-            .await
+        self.client.get(format!("{}/", self.base_uri)).send().await
     }
 }
