@@ -3,7 +3,7 @@ use reqwest_websocket::{Message, RequestBuilderExt};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, sync::mpsc};
 
-use crate::{ChatMessage, RelayInfo};
+use crate::{ChatMessage, RelayInfo, call::CallPartyStatus};
 
 pub struct HoshiNetClient {
     relay_list: RefCell<Vec<RelayInfo>>,
@@ -228,4 +228,6 @@ pub enum HoshiPayload {
     Pong,
     RequestChatMessages,
     ChatMessage(ChatMessage),
+    InviteToCall { from_key: String, id: String },
+    UpdateCallStatus { id: String, status: CallPartyStatus },
 }

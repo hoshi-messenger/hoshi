@@ -6,7 +6,7 @@ mod hoshi_client;
 mod hoshi_net_client;
 mod relay;
 
-pub use call::Call;
+pub use call::{Call, CallPartyStatus};
 pub use chat::ChatMessage;
 pub use contact::Contact;
 pub(crate) use database::Database;
