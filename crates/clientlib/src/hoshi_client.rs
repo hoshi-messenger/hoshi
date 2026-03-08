@@ -9,7 +9,7 @@ use rand_core::{OsRng, RngCore};
 use anyhow::Result;
 
 use crate::{
-    ChatMessage, Contact, Database, HoshiNetClient, RelayInfo,
+    Call, ChatMessage, Contact, Database, HoshiNetClient, RelayInfo,
     database::DBReply,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
 };
@@ -18,6 +18,9 @@ pub struct HoshiClient {
     net: HoshiNetClient,
     db: Database,
     public_key: RefCell<String>,
+
+    active_call: RefCell<Option<Call>>,
+    active_call_watchers: RefCell<Vec<Box<dyn Fn(&Option<Call>)>>>,
 
     contacts: RefCell<HashMap<String, Contact>>,
     contacts_watchers: RefCell<Vec<Box<dyn Fn(&HashMap<String, Contact>)>>>,
@@ -58,6 +61,8 @@ impl HoshiClient {
         let contacts_watchers = RefCell::new(vec![]);
         let messages = RefCell::new(HashMap::new());
         let messages_watchers = RefCell::new(vec![]);
+        let active_call = RefCell::new(None);
+        let active_call_watchers = RefCell::new(vec![]);
 
         {
             let relay_list = relay_list.borrow();
@@ -71,6 +76,8 @@ impl HoshiClient {
             public_key: RefCell::new(public_key),
             contacts,
             contacts_watchers,
+            active_call,
+            active_call_watchers,
             messages,
             messages_watchers,
         })
@@ -96,6 +103,42 @@ impl HoshiClient {
                 ));
             }
         }
+    }
+
+    pub fn call_start(&self, parties: Vec<Contact>) {
+        println!("Call Start: {:?}", parties);
+        if self.active_call.borrow().is_some() {
+            return;
+        }
+        let call = Call::new(parties);
+        self.active_call.replace(Some(call));
+        self.active_call_changed();
+    }
+
+    pub fn call_stop(&self) {
+        {
+            let mut call = self.active_call.borrow_mut();
+            let call = call.take();
+            if let Some(call) = call {
+                call.stop();
+            }
+        }
+        self.active_call_changed();
+    }
+
+    fn active_call_changed(&self) {
+        let call = self.active_call.borrow().clone();
+        for f in self.active_call_watchers.borrow().iter() {
+            f(&call);
+        }
+    }
+
+    pub fn active_call_watch<F>(&self, f: F)
+    where
+        F: Fn(&Option<Call>) + 'static,
+    {
+        f(&self.active_call.borrow());
+        self.active_call_watchers.borrow_mut().push(Box::new(f));
     }
 
     pub fn public_key(&self) -> String {
@@ -207,6 +250,13 @@ impl HoshiClient {
             } else {
                 break;
             }
+        }
+
+        if let Some(call) = self.active_call.borrow().as_ref() {
+            call.step();
+            // This way the we signal to the client that we should
+            // run the step function more frequently while a call is active
+            msgs += 1;
         }
 
         msgs

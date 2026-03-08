@@ -1,3 +1,4 @@
+mod call;
 mod chat;
 mod contact;
 mod database;
@@ -5,6 +6,7 @@ mod hoshi_client;
 mod hoshi_net_client;
 mod relay;
 
+pub use call::Call;
 pub use chat::ChatMessage;
 pub use contact::Contact;
 pub(crate) use database::Database;

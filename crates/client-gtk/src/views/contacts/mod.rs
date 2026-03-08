@@ -67,6 +67,18 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
     if wide_view {
         hbox.add_css_class("wide-avatar");
 
+        let call_button = create_icon_button("call-start-symbolic", "Call");
+        call_button.add_css_class("flat");
+        {
+            let state = state.clone();
+            let contact = contact.clone();
+            call_button.connect_clicked(move |_| {
+                let parties = vec![contact.clone()];
+                state.client.call_start(parties);
+            });
+        }
+        hbox.append(&call_button);
+
         let edit_button = create_icon_button("document-edit-symbolic", "Edit");
         edit_button.add_css_class("flat");
         {
