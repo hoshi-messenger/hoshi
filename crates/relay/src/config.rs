@@ -34,7 +34,7 @@ fn default_config_path() -> PathBuf {
 }
 
 fn default_http_bind_address() -> SocketAddr {
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 2700)
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 2800)
 }
 
 impl ConfigToml {

@@ -70,7 +70,7 @@ impl HoshiClient {
         let incoming_call_watchers = RefCell::new(vec![]);
 
         let relay_list = if cfg!(debug_assertions) {
-            vec!["ws://127.0.0.1:2700/".into()]
+            vec!["ws://127.0.0.1:2800/".into()]
         } else {
             vec!["wss://hoshi.rubhub.net/relay/asuka/".into()]
         };
