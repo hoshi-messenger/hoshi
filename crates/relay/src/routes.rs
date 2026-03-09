@@ -4,7 +4,10 @@ use axum::{
         State, WebSocketUpgrade,
         ws::{Message as WsMessage, WebSocket, rejection::WebSocketUpgradeRejection},
     },
-    http::{HeaderMap, Method, StatusCode},
+    http::{
+        HeaderMap, Method, StatusCode,
+        header::{ACCEPT, AUTHORIZATION, USER_AGENT},
+    },
     response::{Html, IntoResponse},
 };
 use futures::{SinkExt, StreamExt};
@@ -21,8 +24,19 @@ pub async fn index_route(
 ) -> impl IntoResponse {
     match ws {
         Ok(upgrade) => {
+            let user_agent = headers
+                .get(USER_AGENT)
+                .map(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .unwrap_or_default();
+
+            // Just something to get rid of simple bots
+            if !user_agent.contains("Hoshi") {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+
             let client_key = headers
-                .get("authorization")
+                .get(AUTHORIZATION)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.strip_prefix("Bearer "))
                 .map(|s| s.to_string());
@@ -38,7 +52,7 @@ pub async fn index_route(
         Err(_) => match method {
             Method::GET => {
                 let accepts_html = headers
-                    .get("accept")
+                    .get(ACCEPT)
                     .and_then(|v| v.to_str().ok())
                     .map(|v| v.contains("text/html"))
                     .unwrap_or(false);

@@ -1,4 +1,5 @@
 use futures::{SinkExt, StreamExt};
+use reqwest::header::USER_AGENT;
 use reqwest_websocket::{Message, RequestBuilderExt};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, sync::mpsc};
@@ -107,6 +108,7 @@ impl WebSocketPipe {
                     let ws = match reqwest::Client::default()
                         .get(&relay.url)
                         .header("Authorization", format!("Bearer {}", public_key))
+                        .header(USER_AGENT, format!("Hoshi Messenger {}", env!("CARGO_PKG_VERSION")))
                         .upgrade()
                         .send()
                         .await
@@ -115,7 +117,7 @@ impl WebSocketPipe {
                         Ok(r) => match r.into_websocket().await {
                             Ok(ws) => ws,
                             Err(e) => {
-                                eprintln!("WS upgrade failed for {}: {e:?}", relay.url);
+                                eprintln!("WS upgrade failed for {}: {e}", relay.url);
                                 return;
                             }
                         },
