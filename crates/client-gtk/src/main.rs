@@ -9,9 +9,9 @@ const APP_ID: &str = "org.hoshi.hoshi-client-gtk";
 fn main() -> ExitCode {
     let args = Args::parse();
     let mut app_builder = Application::builder().application_id(APP_ID);
-    if cfg!(debug_assertions) {
-        app_builder = app_builder.flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
-    }
+    //if cfg!(debug_assertions) {
+    app_builder = app_builder.flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
+    //}
     let app = app_builder.build();
     app.connect_activate(move |app| {
         AppState::start(app.clone(), args.clone());

@@ -115,7 +115,7 @@ impl WebSocketPipe {
                         Ok(r) => match r.into_websocket().await {
                             Ok(ws) => ws,
                             Err(e) => {
-                                eprintln!("WS upgrade failed for {}: {e}", relay.url);
+                                eprintln!("WS upgrade failed for {}: {e:?}", relay.url);
                                 return;
                             }
                         },
