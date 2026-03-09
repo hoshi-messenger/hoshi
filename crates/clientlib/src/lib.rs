@@ -1,3 +1,4 @@
+mod audio_chunk;
 mod call;
 mod chat;
 mod contact;
@@ -6,6 +7,7 @@ mod hoshi_client;
 mod hoshi_net_client;
 mod relay;
 
+pub use audio_chunk::AudioChunk;
 pub use call::{Call, CallPartyStatus};
 pub use chat::ChatMessage;
 pub use contact::Contact;

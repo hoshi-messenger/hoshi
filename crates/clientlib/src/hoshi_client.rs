@@ -151,6 +151,22 @@ impl HoshiClient {
         }
     }
 
+    pub fn active_call_local_voice_activity(&self) -> f32 {
+        self.active_call
+            .borrow()
+            .as_ref()
+            .map(|call| call.get_local_voice_activity())
+            .unwrap_or(0.0)
+    }
+
+    pub fn active_call_voice_activity(&self, public_key: &str) -> f32 {
+        self.active_call
+            .borrow()
+            .as_ref()
+            .map(|call| call.get_voice_activity(public_key))
+            .unwrap_or(0.0)
+    }
+
     pub fn active_call_watch<F>(&self, f: F)
     where
         F: Fn(&Option<Call>) + 'static,
@@ -458,6 +474,22 @@ impl HoshiClient {
                         }
                     }
                     self.active_call_changed();
+                }
+                HoshiPayload::AudioChunk(chunk) => {
+                    let valid = self.active_call.borrow().as_ref().map_or(false, |call| {
+                        call.id() == chunk.id() && call.get_status(&net_msg.from_key).is_some()
+                    });
+                    if valid {
+                        if let Some(call) = self.active_call.borrow().as_ref() {
+                            call.receive_audio(chunk, &net_msg.from_key);
+                        }
+                    } else {
+                        eprintln!(
+                            "AudioChunk dropped: call_id={} from={}",
+                            chunk.id(),
+                            net_msg.from_key
+                        );
+                    }
                 }
                 _ => {}
             }

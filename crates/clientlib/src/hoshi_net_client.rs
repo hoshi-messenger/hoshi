@@ -3,7 +3,7 @@ use reqwest_websocket::{Message, RequestBuilderExt};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, sync::mpsc};
 
-use crate::{ChatMessage, RelayInfo, call::CallPartyStatus};
+use crate::{ChatMessage, RelayInfo, audio_chunk::AudioChunk, call::CallPartyStatus};
 
 pub struct HoshiNetClient {
     relay_list: RefCell<Vec<RelayInfo>>,
@@ -39,7 +39,6 @@ impl HoshiNetClient {
     }
 
     pub fn send(&self, msg: HoshiMessage) {
-        println!("NetSend: {msg:?}");
         self.outbox.borrow_mut().push(msg);
     }
 
@@ -62,9 +61,7 @@ impl HoshiNetClient {
             let outbox: Vec<HoshiMessage> = self.outbox.borrow_mut().drain(..).collect();
             let pipes = self.pipes.borrow();
             for msg in outbox {
-                println!("Outbox: {:?}", msg);
                 for pipe in pipes.iter() {
-                    println!("Outpipe: {:?}", msg);
                     // ignore send errors, pipe might be dead
                     let _ = pipe.tx.send(msg.clone());
                 }
@@ -230,4 +227,5 @@ pub enum HoshiPayload {
     ChatMessage(ChatMessage),
     InviteToCall { from_key: String, id: String },
     UpdateCallStatus { id: String, status: CallPartyStatus },
+    AudioChunk(AudioChunk),
 }
