@@ -9,7 +9,7 @@ use rand_core::{OsRng, RngCore};
 use anyhow::Result;
 
 use crate::{
-    Call, ChatMessage, Contact, Database, HoshiNetClient, RelayInfo,
+    Call, ChatMessage, Contact, Database, HoshiNetClient,
     call::CallPartyStatus,
     database::DBReply,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
@@ -60,7 +60,6 @@ impl HoshiClient {
         db.messages_get()?;
         db.contacts_get()?;
 
-        let relay_list = RefCell::new(vec![RelayInfo::new("ws://127.0.0.1:2700/".to_string())]);
         let contacts = RefCell::new(HashMap::new());
         let contacts_watchers = RefCell::new(vec![]);
         let messages = RefCell::new(HashMap::new());
@@ -70,6 +69,12 @@ impl HoshiClient {
         let incoming_calls = RefCell::new(vec![]);
         let incoming_call_watchers = RefCell::new(vec![]);
 
+        let relay_list = if cfg!(debug_assertions) {
+            vec!["ws://127.0.0.1:2700/".into()]
+        } else {
+            vec!["wss://hoshi.rubhub.net/relay/asuka/".into()]
+        };
+        let relay_list = RefCell::new(relay_list);
         {
             let relay_list = relay_list.borrow();
             net.update_relays(&relay_list);
