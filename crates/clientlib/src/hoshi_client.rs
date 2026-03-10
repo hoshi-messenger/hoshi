@@ -9,7 +9,7 @@ use rand_core::{OsRng, RngCore};
 use anyhow::Result;
 
 use crate::{
-    Call, ChatMessage, Contact, Database, HoshiNetClient,
+    AudioInterfaceSink, AudioInterfaceSource, Call, ChatMessage, Contact, Database, HoshiNetClient,
     call::CallPartyStatus,
     database::DBReply,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
@@ -19,6 +19,9 @@ pub struct HoshiClient {
     pub(crate) net: HoshiNetClient,
     db: Database,
     public_key: RefCell<String>,
+
+    pub(crate) audio_sink: RefCell<Option<Box<dyn AudioInterfaceSink>>>,
+    pub(crate) audio_source: RefCell<Option<Box<dyn AudioInterfaceSource>>>,
 
     active_call: RefCell<Option<Call>>,
     active_call_watchers: RefCell<Vec<Box<dyn Fn(&Option<Call>)>>>,
@@ -85,15 +88,30 @@ impl HoshiClient {
             net,
             db,
             public_key: RefCell::new(public_key),
-            contacts,
-            contacts_watchers,
+
+            audio_sink: RefCell::new(None),
+            audio_source: RefCell::new(None),
+
             active_call,
             active_call_watchers,
+
             incoming_calls,
             incoming_call_watchers,
+
+            contacts,
+            contacts_watchers,
+
             messages,
             messages_watchers,
         })
+    }
+
+    pub fn set_audio_sink(&self, sink: Option<Box<dyn AudioInterfaceSink>>) {
+        *self.audio_sink.borrow_mut() = sink;
+    }
+
+    pub fn set_audio_source(&self, source: Option<Box<dyn AudioInterfaceSource>>) {
+        *self.audio_source.borrow_mut() = source;
     }
 
     fn request_chat_messages(&self, contact: &Contact) {
@@ -346,7 +364,7 @@ impl HoshiClient {
                     match active_call_id {
                         Some(ref our_id) if our_id == &id => {
                             // Repeat invite for our current call — confirm Active back
-                            if let Some(call) = self.active_call.borrow().as_ref() {
+                            if let Some(call) = self.active_call.borrow_mut().as_mut() {
                                 call.set_party_status(&from_key, CallPartyStatus::Active);
                                 self.net.send(HoshiMessage::new(
                                     self.public_key(),
@@ -394,7 +412,7 @@ impl HoshiClient {
                                     let contact = self
                                         .contact_get(&from_key)
                                         .unwrap_or_else(|| Contact::new(from_key.clone(), None));
-                                    let call = Call::from_invite(id.clone(), contact);
+                                    let mut call = Call::from_invite(id.clone(), contact);
                                     call.set_party_status(&from_key, CallPartyStatus::Active);
                                     self.active_call.replace(Some(call));
                                     self.active_call_changed();
@@ -419,7 +437,7 @@ impl HoshiClient {
                                     .position(|c| c.id() == id);
                                 match existing {
                                     Some(i) => {
-                                        self.incoming_calls.borrow()[i].update_last_ring();
+                                        self.incoming_calls.borrow_mut()[i].update_last_ring();
                                     }
                                     None => {
                                         let contact =
@@ -443,7 +461,7 @@ impl HoshiClient {
                                 .position(|c| c.id() == id);
                             match existing {
                                 Some(i) => {
-                                    self.incoming_calls.borrow()[i].update_last_ring();
+                                    self.incoming_calls.borrow_mut()[i].update_last_ring();
                                 }
                                 None => {
                                     let contact = self
@@ -459,11 +477,11 @@ impl HoshiClient {
                     }
                 }
                 HoshiPayload::UpdateCallStatus { id, status } => {
-                    if let Some(call) = self.active_call.borrow().as_ref() {
+                    if let Some(call) = self.active_call.borrow_mut().as_mut() {
                         if call.id() == id {
                             call.set_party_status(&net_msg.from_key, status);
                             if matches!(status, CallPartyStatus::HungUp) {
-                                *call.call_ended.borrow_mut() = Some(std::time::Instant::now());
+                                call.call_ended = Some(std::time::Instant::now());
                             }
                         }
                     }
@@ -485,8 +503,8 @@ impl HoshiClient {
                         call.id() == chunk.id() && call.get_status(&net_msg.from_key).is_some()
                     });
                     if valid {
-                        if let Some(call) = self.active_call.borrow().as_ref() {
-                            call.receive_audio(chunk, &net_msg.from_key);
+                        if let Some(call) = self.active_call.borrow_mut().as_mut() {
+                            call.receive_audio(chunk, &net_msg.from_key, self);
                         }
                     } else {
                         eprintln!(
@@ -514,7 +532,7 @@ impl HoshiClient {
             }
         }
 
-        if let Some(call) = self.active_call.borrow().as_ref() {
+        if let Some(call) = self.active_call.borrow_mut().as_mut() {
             call.step(self);
             // This way the we signal to the client that we should
             // run the step function more frequently while a call is active

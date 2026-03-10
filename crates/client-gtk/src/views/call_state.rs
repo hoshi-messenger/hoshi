@@ -146,7 +146,7 @@ pub fn init_call_state_banner(state: AppState) {
 
     state.client.active_call_watch(move |call| match call {
         Some(call) => {
-            *call_started.borrow_mut() = *call.call_started.borrow();
+            *call_started.borrow_mut() = call.call_started;
 
             while let Some(child) = parties_box.first_child() {
                 parties_box.remove(&child);

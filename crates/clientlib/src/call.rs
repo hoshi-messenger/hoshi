@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -9,109 +9,62 @@ use crate::{
     hoshi_net_client::{HoshiMessage, HoshiPayload},
 };
 
-struct AudioCapture {
-    /// Keeps the cpal stream alive; dropped when audio stops.
-    _stream: cpal::Stream,
-    /// Receives μ-law encoded packets of exactly 2048 samples from the resampling thread.
-    rx: std::sync::mpsc::Receiver<Vec<u8>>,
-}
-
-struct AudioPlayback {
-    /// Keeps the rodio output stream alive.
-    _stream: rodio::OutputStream,
-    sink: rodio::Sink,
-}
-
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Call {
     id: String,
-    parties: RefCell<Vec<CallParty>>,
-    last_invite: RefCell<Option<std::time::Instant>>,
-    pub call_started: RefCell<Option<std::time::Instant>>,
-    pub call_ended: RefCell<Option<std::time::Instant>>,
-    last_ring: RefCell<Option<std::time::Instant>>,
-    audio: RefCell<Option<(AudioCapture, AudioPlayback)>>,
-    chunk_offset: RefCell<i32>,
-    local_voice_activity: RefCell<f32>,
-}
-
-impl Clone for Call {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id.clone(),
-            parties: self.parties.clone(),
-            last_invite: self.last_invite.clone(),
-            call_started: self.call_started.clone(),
-            call_ended: self.call_ended.clone(),
-            last_ring: self.last_ring.clone(),
-            // Audio state is not cloned — the clone starts silent.
-            audio: RefCell::new(None),
-            chunk_offset: self.chunk_offset.clone(),
-            local_voice_activity: self.local_voice_activity.clone(),
-        }
-    }
-}
-
-impl std::fmt::Debug for AudioCapture {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("AudioCapture")
-    }
-}
-
-impl std::fmt::Debug for AudioPlayback {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("AudioPlayback")
-    }
+    parties: Vec<CallParty>,
+    last_invite: Option<Instant>,
+    pub call_started: Option<Instant>,
+    pub call_ended: Option<Instant>,
+    last_ring: Option<Instant>,
+    chunk_offset: i32,
+    local_voice_activity: f32,
+    audio_started: bool,
+    last_audio_send: Option<Instant>,
 }
 
 impl Call {
     pub fn new(parties: Vec<Contact>) -> Self {
-        let parties = parties
-            .into_iter()
-            .map(|p| p.into())
-            .collect::<Vec<CallParty>>();
-        let parties = RefCell::new(parties);
-        let id = uuid::Uuid::now_v7().to_string();
+        let parties = parties.into_iter().map(|p| p.into()).collect();
         Self {
-            id,
+            id: uuid::Uuid::now_v7().to_string(),
             parties,
-            last_invite: RefCell::new(None),
-            call_started: RefCell::new(Some(std::time::Instant::now())),
-            call_ended: RefCell::new(None),
-            last_ring: RefCell::new(None),
-            audio: RefCell::new(None),
-            chunk_offset: RefCell::new(0),
-            local_voice_activity: RefCell::new(0.0),
+            last_invite: None,
+            call_started: Some(Instant::now()),
+            call_ended: None,
+            last_ring: None,
+            chunk_offset: 0,
+            local_voice_activity: 0.0,
+            audio_started: false,
+            last_audio_send: None,
         }
     }
 
     pub fn from_invite(id: String, caller: Contact) -> Self {
         Self {
             id,
-            parties: RefCell::new(vec![caller.into()]),
-            last_invite: RefCell::new(None),
-            call_started: RefCell::new(Some(std::time::Instant::now())),
-            call_ended: RefCell::new(None),
-            last_ring: RefCell::new(Some(std::time::Instant::now())),
-            audio: RefCell::new(None),
-            chunk_offset: RefCell::new(0),
-            local_voice_activity: RefCell::new(0.0),
+            parties: vec![caller.into()],
+            last_invite: None,
+            call_started: Some(Instant::now()),
+            call_ended: None,
+            last_ring: Some(Instant::now()),
+            chunk_offset: 0,
+            local_voice_activity: 0.0,
+            audio_started: false,
+            last_audio_send: None,
         }
     }
 
-    pub fn update_last_ring(&self) {
-        *self.last_ring.borrow_mut() = Some(std::time::Instant::now());
+    pub fn update_last_ring(&mut self) {
+        self.last_ring = Some(Instant::now());
     }
 
     pub fn is_ring_timed_out(&self) -> bool {
-        self.last_ring
-            .borrow()
-            .map_or(false, |t| t.elapsed().as_secs() >= 3)
+        self.last_ring.map_or(false, |t| t.elapsed().as_secs() >= 3)
     }
 
     pub fn should_auto_close(&self) -> bool {
         self.call_ended
-            .borrow()
             .map_or(false, |t| t.elapsed().as_secs() >= 5)
     }
 
@@ -120,34 +73,32 @@ impl Call {
     }
 
     pub fn get_status(&self, public_key: &str) -> Option<CallPartyStatus> {
-        for party in self.parties.borrow().iter() {
-            if &party.contact.public_key == public_key {
-                return Some(party.status);
-            }
-        }
-        None
+        self.parties
+            .iter()
+            .find(|p| p.contact.public_key == public_key)
+            .map(|p| p.status)
     }
 
-    pub fn set_party_status(&self, public_key: &str, status: CallPartyStatus) {
-        for party in self.parties.borrow_mut().iter_mut() {
-            if party.contact.public_key == public_key {
-                party.status = status;
-                return;
-            }
+    pub fn set_party_status(&mut self, public_key: &str, status: CallPartyStatus) {
+        if let Some(party) = self
+            .parties
+            .iter_mut()
+            .find(|p| p.contact.public_key == public_key)
+        {
+            party.status = status;
         }
     }
 
-    pub fn add_party(&self, contact: Contact) -> bool {
+    pub fn add_party(&mut self, contact: Contact) -> bool {
         if self.get_status(&contact.public_key).is_some() {
             return false;
         }
-        self.parties.borrow_mut().push(contact.into());
+        self.parties.push(contact.into());
         true
     }
 
     pub fn get_party_names(&self) -> Vec<String> {
         self.parties
-            .borrow()
             .iter()
             .map(|p| p.contact.alias.clone())
             .collect()
@@ -155,7 +106,6 @@ impl Call {
 
     pub fn get_party_public_keys(&self) -> Vec<String> {
         self.parties
-            .borrow()
             .iter()
             .map(|p| p.contact.public_key.clone())
             .collect()
@@ -163,23 +113,21 @@ impl Call {
 
     pub fn get_party_status_pairs(&self) -> Vec<(String, CallPartyStatus)> {
         self.parties
-            .borrow()
             .iter()
             .map(|p| (p.contact.alias.clone(), p.status))
             .collect()
     }
 
     pub fn get_parties(&self) -> Vec<CallParty> {
-        self.parties.borrow().clone()
+        self.parties.clone()
     }
 
     pub fn get_local_voice_activity(&self) -> f32 {
-        *self.local_voice_activity.borrow()
+        self.local_voice_activity
     }
 
     pub fn get_voice_activity(&self, public_key: &str) -> f32 {
         self.parties
-            .borrow()
             .iter()
             .find(|p| p.contact.public_key == public_key)
             .map(|p| p.voice_activity)
@@ -190,189 +138,59 @@ impl Call {
         // ToDo: inform other parties
     }
 
-    pub fn receive_audio(&self, chunk: AudioChunk, from_key: &str) {
-        let decoded = chunk.decode_f32();
+    /// Receives an incoming audio chunk, decodes it, upsamples from 24kHz to 48kHz,
+    /// and writes it to the audio sink.
+    pub fn receive_audio(&mut self, chunk: AudioChunk, from_key: &str, client: &HoshiClient) {
+        let decoded = chunk.decode_i16(); // i16 samples at 24kHz
 
-        // RMS of this chunk as a rough voice activity level
+        // RMS voice activity
         let activity = if decoded.is_empty() {
             0.0
         } else {
-            let sum_sq: f32 = decoded.iter().map(|&s| s * s).sum();
+            let sum_sq: f32 = decoded
+                .iter()
+                .map(|&s| {
+                    let f = s as f32 / 32768.0;
+                    f * f
+                })
+                .sum();
             (sum_sq / decoded.len() as f32).sqrt()
         };
 
-        for party in self.parties.borrow_mut().iter_mut() {
-            if party.contact.public_key == from_key {
-                party.voice_activity = activity;
-                break;
-            }
+        if let Some(party) = self
+            .parties
+            .iter_mut()
+            .find(|p| p.contact.public_key == from_key)
+        {
+            party.voice_activity = activity;
         }
 
-        if let Some((_, playback)) = self.audio.borrow().as_ref() {
-            playback.sink.append(rodio::buffer::SamplesBuffer::new(
-                1,
-                chunk.sample_rate() as u32,
-                decoded,
-            ));
+        // Upsample 24kHz → 48kHz by repeating each sample
+        let upsampled: Vec<i16> = decoded.iter().flat_map(|&s| [s, s]).collect();
+
+        if let Some(sink) = client.audio_sink.borrow().as_ref() {
+            sink.write(&upsampled);
         }
     }
 
     fn all_parties_active(&self) -> bool {
-        let parties = self.parties.borrow();
-        !parties.is_empty()
-            && parties
+        !self.parties.is_empty()
+            && self
+                .parties
                 .iter()
                 .all(|p| matches!(p.status, CallPartyStatus::Active))
     }
 
-    fn start_audio() -> Option<(AudioCapture, AudioPlayback)> {
-        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-
-        let host = cpal::default_host();
-        let in_device = match host.default_input_device() {
-            Some(d) => d,
-            None => {
-                eprintln!("No default input device available");
-                return None;
-            }
-        };
-        let in_config = match in_device.default_input_config() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Failed to get default input config: {e}");
-                return None;
-            }
-        };
-        let in_rate = in_config.sample_rate().0;
-        let channels = in_config.channels() as usize;
-        let sample_format = in_config.sample_format();
-        let stream_config: cpal::StreamConfig = in_config.into();
-
-        // raw mono f32 samples from cpal callback → resampling thread
-        let (raw_tx, raw_rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(32);
-        // encoded 2048-sample μ-law packets → Call::step
-        let (encoded_tx, encoded_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(32);
-
-        // Resampling thread: rubato FftFixedOut resamples hw_rate → 32 kHz
-        std::thread::spawn(move || {
-            use rubato::{FftFixedOut, Resampler};
-            let mut resampler = match FftFixedOut::<f32>::new(in_rate as usize, 32_000, 2048, 2, 1)
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("rubato init error: {e}");
-                    return;
-                }
-            };
-
-            let mut accum: Vec<f32> = Vec::new();
-
-            while let Ok(samples) = raw_rx.recv() {
-                accum.extend_from_slice(&samples);
-                loop {
-                    let needed = resampler.input_frames_next();
-                    if accum.len() < needed {
-                        break;
-                    }
-                    let chunk: Vec<f32> = accum.drain(..needed).collect();
-                    match resampler.process(&[&chunk], None) {
-                        Ok(output) => {
-                            let encoded: Vec<u8> = output[0]
-                                .iter()
-                                .map(|&s| linear_to_ulaw((s.clamp(-1.0, 1.0) * 32767.0) as i16))
-                                .collect();
-                            let _ = encoded_tx.try_send(encoded);
-                        }
-                        Err(e) => eprintln!("rubato process error: {e}"),
-                    }
-                }
-            }
-        });
-
-        let stream = match sample_format {
-            cpal::SampleFormat::F32 => in_device.build_input_stream(
-                &stream_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    let mono: Vec<f32> = data
-                        .chunks(channels)
-                        .map(|c| c.iter().sum::<f32>() / channels as f32)
-                        .collect();
-                    let _ = raw_tx.try_send(mono);
-                },
-                |e| eprintln!("cpal input stream error: {e}"),
-                None,
-            ),
-            cpal::SampleFormat::I16 => in_device.build_input_stream(
-                &stream_config,
-                move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    let mono: Vec<f32> = data
-                        .chunks(channels)
-                        .map(|c| {
-                            c.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() / channels as f32
-                        })
-                        .collect();
-                    let _ = raw_tx.try_send(mono);
-                },
-                |e| eprintln!("cpal input stream error: {e}"),
-                None,
-            ),
-            fmt => {
-                eprintln!("Unsupported input sample format: {fmt:?}");
-                return None;
-            }
-        };
-
-        let stream = match stream {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to build input stream: {e}");
-                return None;
-            }
-        };
-
-        if let Err(e) = stream.play() {
-            eprintln!("Failed to start input stream: {e}");
-            return None;
-        }
-
-        let (out_stream, handle) = match rodio::OutputStream::try_default() {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("Failed to open audio output: {e}");
-                return None;
-            }
-        };
-        let sink = match rodio::Sink::try_new(&handle) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to create audio sink: {e}");
-                return None;
-            }
-        };
-
-        Some((
-            AudioCapture {
-                _stream: stream,
-                rx: encoded_rx,
-            },
-            AudioPlayback {
-                _stream: out_stream,
-                sink,
-            },
-        ))
-    }
-
-    pub fn step(&self, client: &HoshiClient) {
+    pub fn step(&mut self, client: &HoshiClient) {
         // --- Invite sending (ringing parties) ---
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         let should_send = self
             .last_invite
-            .borrow()
             .map_or(true, |t| now.duration_since(t).as_secs() >= 1);
 
         if should_send {
-            *self.last_invite.borrow_mut() = Some(now);
-            for party in self.parties.borrow().iter() {
+            self.last_invite = Some(now);
+            for party in &self.parties {
                 if matches!(party.status, CallPartyStatus::Ringing) {
                     client.net.send(HoshiMessage::new(
                         client.public_key(),
@@ -386,57 +204,91 @@ impl Call {
             }
         }
 
-        // --- Audio: start when all parties are active, stop otherwise ---
-        if self.all_parties_active() {
-            if self.audio.borrow().is_none() {
-                *self.audio.borrow_mut() = Self::start_audio();
+        // --- Audio: start/stop sink and source based on party status ---
+        let all_active = self.all_parties_active();
+        if all_active && !self.audio_started {
+            self.audio_started = true;
+            if let Some(sink) = client.audio_sink.borrow().as_ref() {
+                sink.play();
             }
-        } else {
-            self.audio.borrow_mut().take();
+            if let Some(source) = client.audio_source.borrow().as_ref() {
+                source.play();
+            }
+        } else if !all_active && self.audio_started {
+            self.audio_started = false;
+            if let Some(sink) = client.audio_sink.borrow().as_ref() {
+                sink.pause();
+            }
+            if let Some(source) = client.audio_source.borrow().as_ref() {
+                source.pause();
+            }
         }
 
-        // --- Drain captured packets and send to all active parties ---
+        if !self.audio_started {
+            return;
+        }
+
+        // --- Capture and send audio every 20ms ---
+        let should_send_audio = self
+            .last_audio_send
+            .map_or(true, |t| t.elapsed().as_millis() >= 20);
+        if !should_send_audio {
+            return;
+        }
+        self.last_audio_send = Some(Instant::now());
+
         let my_key = client.public_key();
         let call_id = self.id.clone();
         let active_keys: Vec<String> = self
             .parties
-            .borrow()
             .iter()
             .filter(|p| matches!(p.status, CallPartyStatus::Active))
             .map(|p| p.contact.public_key.clone())
             .collect();
 
-        if let Some((capture, _)) = self.audio.borrow().as_ref() {
-            while let Ok(encoded) = capture.rx.try_recv() {
-                let offset = {
-                    let mut o = self.chunk_offset.borrow_mut();
-                    let v = *o;
-                    *o += 1;
-                    v
-                };
-                let chunk = AudioChunk::ULaw {
-                    id: call_id.clone(),
-                    chunk_offset: offset,
-                    sample_rate: 32_000,
-                    samples: encoded,
-                };
+        // Read 20ms of mono i16 audio at 48kHz (960 samples)
+        let mut buf_48 = [0i16; 960];
+        if let Some(source) = client.audio_source.borrow().as_ref() {
+            source.read(&mut buf_48);
+        }
 
-                // Measure local voice activity from the outgoing audio.
-                let decoded = chunk.decode_f32();
-                if !decoded.is_empty() {
-                    let sum_sq: f32 = decoded.iter().map(|&s| s * s).sum();
-                    *self.local_voice_activity.borrow_mut() =
-                        (sum_sq / decoded.len() as f32).sqrt();
-                }
+        // Downsample 48kHz → 24kHz by averaging pairs of samples
+        let samples_24: Vec<i16> = buf_48
+            .chunks(2)
+            .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2) as i16)
+            .collect();
 
-                for key in &active_keys {
-                    client.net.send(HoshiMessage::new(
-                        my_key.clone(),
-                        key.clone(),
-                        HoshiPayload::AudioChunk(chunk.clone()),
-                    ));
-                }
-            }
+        // Voice activity on outgoing audio
+        if !samples_24.is_empty() {
+            let sum_sq: f32 = samples_24
+                .iter()
+                .map(|&s| {
+                    let f = s as f32 / 32768.0;
+                    f * f
+                })
+                .sum();
+            self.local_voice_activity = (sum_sq / samples_24.len() as f32).sqrt();
+        }
+
+        // Encode as μ-law
+        let encoded: Vec<u8> = samples_24.iter().map(|&s| linear_to_ulaw(s)).collect();
+
+        let offset = self.chunk_offset;
+        self.chunk_offset += 1;
+
+        let chunk = AudioChunk::ULaw {
+            id: call_id.clone(),
+            chunk_offset: offset,
+            sample_rate: 24_000,
+            samples: encoded,
+        };
+
+        for key in &active_keys {
+            client.net.send(HoshiMessage::new(
+                my_key.clone(),
+                key.clone(),
+                HoshiPayload::AudioChunk(chunk.clone()),
+            ));
         }
     }
 }

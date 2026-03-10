@@ -36,23 +36,20 @@ impl AudioChunk {
         }
     }
 
-    pub fn decode_f32(&self) -> Vec<f32> {
-        self.samples().iter().map(|&b| ulaw_to_f32(b)).collect()
+    pub fn decode_i16(&self) -> Vec<i16> {
+        self.samples().iter().map(|&b| ulaw_to_linear(b)).collect()
     }
-}
-
-fn ulaw_to_f32(u_val: u8) -> f32 {
-    ulaw_to_linear(u_val) as f32 / 32768.0
 }
 
 fn ulaw_to_linear(u_val: u8) -> i16 {
     let u = !u_val;
     let t = (((u & 0x0F) as i32) << 3) + 0x84;
     let t = t << ((u & 0x70) >> 4);
+    // u & 0x80 != 0 means the original sign bit was 1 (positive)
     if u & 0x80 != 0 {
-        (0x84 - t) as i16
-    } else {
         (t - 0x84) as i16
+    } else {
+        (0x84 - t) as i16
     }
 }
 

@@ -10,6 +10,7 @@ base64 = { workspace = true }
 adw = { workspace = true }
 glib = { workspace = true }
 gtk = { workspace = true }
+cpal = { workspace = true }
 
 clap = { workspace = true }
 hoshi-clientlib = { path = "../clientlib" }

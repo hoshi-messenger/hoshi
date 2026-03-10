@@ -4,6 +4,8 @@ Monorepo of the Hoshi network/messenger. Still in early development so it's not 
 
 ## ToDo / Next Steps
 
+- [ ] Abstract audio interface, shouldn't have Rodio in clientlib
+- [ ] Make the clientlib reconnection logic more robust
 - [ ] Use snow for actual crypto
 
 ## Backlog
@@ -23,11 +25,16 @@ a couple of them since they shouldn't take too long
 - [ ] Add timestamps only if there's a pause of more than 5 minutes between messages
 - [ ] Add an Application Icon
 - [ ] Add right/long click context menu to contacts, should show Edit/Delete options
+- [ ] Contact status indicators
+- [ ] Show relay metrics on the landing page and send it via JSON
+- [ ] Build public global relay dashboard
+- [ ] Show last message instead of public key, in the chat view show status 
 
 ## Long-term polish
 Those are more complicated non-essential tasks, will probably take a while until we get to them, though AI might help here.
 
 - [ ] Build custom Emoji chooser, make it look nice on bare X11
+- [ ] Typing indicator
 
 ## Completed
 

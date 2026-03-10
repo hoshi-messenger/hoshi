@@ -2,7 +2,7 @@ use base64::prelude::*;
 use hoshi_clientlib::HoshiClient;
 use std::{rc::Rc, time::Duration};
 
-use crate::{Args, init_call_state_banner, init_incoming_call_banner};
+use crate::{Args, init_audio_interfaces, init_call_state_banner, init_incoming_call_banner};
 
 use adw::{Application, ApplicationWindow, HeaderBar, NavigationView, ToolbarView, prelude::*};
 use gtk::CssProvider;
@@ -153,6 +153,12 @@ impl AppState {
             client: Rc::new(client),
         };
         state.spawn_client_handler_future();
+        if let Err(err) = init_audio_interfaces(state.clone()) {
+            eprintln!(
+                "Couldn't initialize audio interface, starting without support for calls: {:?}",
+                err
+            );
+        }
         init_call_state_banner(state.clone());
         init_incoming_call_banner(state.clone());
         {
