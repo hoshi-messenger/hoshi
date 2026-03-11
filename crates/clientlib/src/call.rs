@@ -13,13 +13,12 @@ use crate::{
 pub struct Call {
     id: String,
     parties: Vec<CallParty>,
+
+    last_audio_send: Option<Instant>,
     last_invite: Option<Instant>,
     pub call_started: Option<Instant>,
     pub call_ended: Option<Instant>,
     last_ring: Option<Instant>,
-    chunk_offset: i32,
-    local_voice_activity: f32,
-    last_audio_send: Option<Instant>,
 }
 
 impl Call {
@@ -32,8 +31,6 @@ impl Call {
             call_started: Some(Instant::now()),
             call_ended: None,
             last_ring: None,
-            chunk_offset: 0,
-            local_voice_activity: 0.0,
             last_audio_send: None,
         }
     }
@@ -46,10 +43,18 @@ impl Call {
             call_started: Some(Instant::now()),
             call_ended: None,
             last_ring: Some(Instant::now()),
-            chunk_offset: 0,
-            local_voice_activity: 0.0,
             last_audio_send: None,
         }
+    }
+
+    pub fn is_active(&self, client: &HoshiClient) -> bool {
+        let public_key = client.public_key();
+        for party in self.parties.iter() {
+            if party.contact.public_key == public_key {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn update_last_ring(&mut self) {
@@ -119,10 +124,6 @@ impl Call {
         self.parties.clone()
     }
 
-    pub fn get_local_voice_activity(&self) -> f32 {
-        self.local_voice_activity
-    }
-
     pub fn get_voice_activity(&self, public_key: &str) -> f32 {
         self.parties
             .iter()
@@ -170,14 +171,6 @@ impl Call {
         }
     }
 
-    fn all_parties_active(&self) -> bool {
-        !self.parties.is_empty()
-            && self
-                .parties
-                .iter()
-                .all(|p| matches!(p.status, CallPartyStatus::Active))
-    }
-
     pub fn step(&mut self, client: &HoshiClient) {
         // --- Invite sending (ringing parties) ---
         let now = Instant::now();
@@ -193,8 +186,7 @@ impl Call {
                         client.public_key(),
                         party.contact.public_key.clone(),
                         HoshiPayload::InviteToCall {
-                            from_key: client.public_key(),
-                            id: self.id.clone(),
+                            call_id: self.id.clone(),
                         },
                     ));
                 }
@@ -202,7 +194,7 @@ impl Call {
         }
 
         // --- Audio: start/stop sink and source based on party status ---
-        if self.all_parties_active() {
+        if self.parties.len() > 1 {
             client.audio_sink.borrow().as_ref().map(|s| s.play());
             client.audio_source.borrow().as_ref().map(|s| s.play());
         } else {
@@ -240,27 +232,12 @@ impl Call {
             .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2) as i16)
             .collect();
 
-        // Voice activity on outgoing audio
-        if !samples_24.is_empty() {
-            let sum_sq: f32 = samples_24
-                .iter()
-                .map(|&s| {
-                    let f = s as f32 / 32768.0;
-                    f * f
-                })
-                .sum();
-            self.local_voice_activity = (sum_sq / samples_24.len() as f32).sqrt();
-        }
-
         // Encode as μ-law
         let encoded: Vec<u8> = samples_24.iter().map(|&s| linear_to_ulaw(s)).collect();
 
-        let offset = self.chunk_offset;
-        self.chunk_offset += 1;
-
         let chunk = AudioChunk::ULaw {
             id: call_id.clone(),
-            chunk_offset: offset,
+            chunk_offset: 0,
             sample_rate: 24_000,
             samples: encoded,
         };
@@ -269,7 +246,10 @@ impl Call {
             client.net.send(HoshiMessage::new(
                 my_key.clone(),
                 key.clone(),
-                HoshiPayload::AudioChunk(chunk.clone()),
+                HoshiPayload::AudioChunk {
+                    call_id: self.id.clone(),
+                    chunk: chunk.clone(),
+                },
             ));
         }
     }

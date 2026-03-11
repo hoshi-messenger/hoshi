@@ -2,7 +2,7 @@ use base64::prelude::*;
 use hoshi_clientlib::HoshiClient;
 use std::{rc::Rc, time::Duration};
 
-use crate::{Args, init_audio_interfaces, init_call_state_banner, init_incoming_call_banner};
+use crate::{Args, init_audio_interfaces, init_call_banner};
 
 use adw::{Application, ApplicationWindow, HeaderBar, NavigationView, ToolbarView, prelude::*};
 use gtk::CssProvider;
@@ -159,8 +159,7 @@ impl AppState {
                 err
             );
         }
-        init_call_state_banner(state.clone());
-        init_incoming_call_banner(state.clone());
+        init_call_banner(state.clone());
         {
             let state = state.clone();
             settings_btn.connect_clicked(move |btn| {

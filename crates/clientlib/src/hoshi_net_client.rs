@@ -227,7 +227,16 @@ pub enum HoshiPayload {
     Pong,
     RequestChatMessages,
     ChatMessage(ChatMessage),
-    InviteToCall { from_key: String, id: String },
-    UpdateCallStatus { id: String, status: CallPartyStatus },
-    AudioChunk(AudioChunk),
+    InviteToCall {
+        call_id: String,
+    },
+    UpdateCallStatus {
+        call_id: String,
+        party_id: String,
+        status: CallPartyStatus,
+    },
+    AudioChunk {
+        call_id: String,
+        chunk: AudioChunk,
+    },
 }
