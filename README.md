@@ -4,7 +4,6 @@ Monorepo of the Hoshi network/messenger. Still in early development so it's not 
 
 ## ToDo / Next Steps
 
-- [ ] Abstract audio interface, shouldn't have Rodio in clientlib
 - [ ] Make the clientlib reconnection logic more robust
 - [ ] Use snow for actual crypto
 
@@ -41,3 +40,4 @@ Those are more complicated non-essential tasks, will probably take a while until
 - [X] Add arrows to chat bubbles
 - [X] Notify and sync instead of sending messages directly, on startup notify all contacts
 - [X] Audio calls, start with a Ring message, the other party may then send back an Accept/Reject message directly, once the call is open just spam the other side with regular G711 u-Law sample data and output it with rodio or something like that
+- [X] Abstract audio interface, shouldn't have Rodio in clientlib

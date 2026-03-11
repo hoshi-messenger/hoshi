@@ -19,7 +19,6 @@ pub struct Call {
     last_ring: Option<Instant>,
     chunk_offset: i32,
     local_voice_activity: f32,
-    audio_started: bool,
     last_audio_send: Option<Instant>,
 }
 
@@ -35,7 +34,6 @@ impl Call {
             last_ring: None,
             chunk_offset: 0,
             local_voice_activity: 0.0,
-            audio_started: false,
             last_audio_send: None,
         }
     }
@@ -50,7 +48,6 @@ impl Call {
             last_ring: Some(Instant::now()),
             chunk_offset: 0,
             local_voice_activity: 0.0,
-            audio_started: false,
             last_audio_send: None,
         }
     }
@@ -205,27 +202,12 @@ impl Call {
         }
 
         // --- Audio: start/stop sink and source based on party status ---
-        let all_active = self.all_parties_active();
-        if all_active && !self.audio_started {
-            self.audio_started = true;
-            if let Some(sink) = client.audio_sink.borrow().as_ref() {
-                sink.play();
-            }
-            if let Some(source) = client.audio_source.borrow().as_ref() {
-                source.play();
-            }
-        } else if !all_active && self.audio_started {
-            self.audio_started = false;
-            if let Some(sink) = client.audio_sink.borrow().as_ref() {
-                sink.pause();
-            }
-            if let Some(source) = client.audio_source.borrow().as_ref() {
-                source.pause();
-            }
-        }
-
-        if !self.audio_started {
-            return;
+        if self.all_parties_active() {
+            client.audio_sink.borrow().as_ref().map(|s| s.play());
+            client.audio_source.borrow().as_ref().map(|s| s.play());
+        } else {
+            client.audio_sink.borrow().as_ref().map(|s| s.pause());
+            client.audio_source.borrow().as_ref().map(|s| s.pause());
         }
 
         // --- Capture and send audio every 20ms ---

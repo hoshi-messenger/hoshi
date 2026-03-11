@@ -37,13 +37,19 @@ impl AudioInterfaceSink for ClientSink {
     }
 
     fn play(&self) {
-        let _ = self.stream.play();
-        *self.playing.borrow_mut() = true;
+        let mut playing = self.playing.borrow_mut();
+        if !*playing {
+            let _ = self.stream.play();
+            *playing = true;
+        }
     }
 
     fn pause(&self) {
-        let _ = self.stream.pause();
-        *self.playing.borrow_mut() = false;
+        let mut playing = self.playing.borrow_mut();
+        if *playing {
+            let _ = self.stream.pause();
+            *playing = false;
+        }
     }
 }
 
@@ -69,13 +75,19 @@ impl AudioInterfaceSource for ClientSource {
     }
 
     fn play(&self) {
-        let _ = self.stream.play();
-        *self.playing.borrow_mut() = true;
+        let mut playing = self.playing.borrow_mut();
+        if !*playing {
+            let _ = self.stream.play();
+            *playing = true;
+        }
     }
 
     fn pause(&self) {
-        let _ = self.stream.pause();
-        *self.playing.borrow_mut() = false;
+        let mut playing = self.playing.borrow_mut();
+        if *playing {
+            let _ = self.stream.pause();
+            *playing = false;
+        }
     }
 }
 

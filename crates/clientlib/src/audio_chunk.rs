@@ -45,11 +45,10 @@ fn ulaw_to_linear(u_val: u8) -> i16 {
     let u = !u_val;
     let t = (((u & 0x0F) as i32) << 3) + 0x84;
     let t = t << ((u & 0x70) >> 4);
-    // u & 0x80 != 0 means the original sign bit was 1 (positive)
     if u & 0x80 != 0 {
-        (t - 0x84) as i16
-    } else {
         (0x84 - t) as i16
+    } else {
+        (t - 0x84) as i16
     }
 }
 

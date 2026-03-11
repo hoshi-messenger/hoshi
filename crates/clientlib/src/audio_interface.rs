@@ -4,9 +4,13 @@ pub trait AudioInterfaceSink {
     fn write(&self, samples: &[i16]) -> usize;
 
     /// Gets called by the clientlib before we start calling write
+    ///
+    /// Can safely be called if already playing
     fn play(&self);
 
     /// Gets called by the clientlib after the last call to write, if a call ends
+    ///
+    /// Can safely be called when already paused
     fn pause(&self);
 }
 
@@ -16,9 +20,13 @@ pub trait AudioInterfaceSource {
     fn read(&self, buf: &mut [i16]) -> usize;
 
     /// Gets called by the clientlib before we call read, mainly because a call is about to start
+    ///
+    /// Can safely be called if already playing
     fn play(&self);
 
     /// Gets called by the clientlib after a call concluded and we'll stop calling read for a while
+    ///
+    /// Can safely be called if already paused
     fn pause(&self);
 }
 
