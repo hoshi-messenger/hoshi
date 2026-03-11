@@ -41,7 +41,6 @@ impl HoshiClient {
         let net = HoshiNetClient::new();
         let path = db_path.unwrap_or_else(|| {
             let p = dirs::home_dir().unwrap().join(".hoshi");
-            std::fs::create_dir_all(&p).unwrap();
             p.join("client.sqlite3")
         });
         if let Some(parent) = path.parent() {
