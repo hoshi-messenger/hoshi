@@ -10,7 +10,7 @@ use anyhow::{Result, anyhow};
 
 use crate::{
     AudioInterfaceSink, AudioInterfaceSource, Call, ChatMessage, Contact, Database, HoshiNetClient,
-    call::CallPartyStatus,
+    call::{CallParty, CallPartyStatus},
     database::DBReply,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
 };
@@ -128,9 +128,15 @@ impl HoshiClient {
     }
 
     pub fn call_start(&self, parties: Vec<Contact>) {
-        println!("Call Start: {:?}", parties);
-        let call = Call::new(parties);
+        let mut call = Call::new(parties);
+
+        let mut party: CallParty = self.own_contact().into();
+        party.status = CallPartyStatus::Active;
+        call.add_party(party);
+        println!("Call Start: {:?}", call);
         self.calls.borrow_mut().push(call);
+
+        self.calls_changed();
     }
 
     pub fn active_call_local_voice_activity(&self) -> f32 {
@@ -161,10 +167,16 @@ impl HoshiClient {
         self.calls_changed();
     }
 
+    pub fn call_get(&self, call_id: &str) -> Option<Call> {
+        for call in self.calls.borrow().iter() {
+            if call.id() == call_id {
+                return Some(call.clone());
+            }
+        }
+        None
+    }
+
     pub fn call_set_status(&self, call_id: &str, status: CallPartyStatus) -> Result<()> {
-        // Sadly required since we need to call calls_changed, so we need to
-        // exit the for loop and then figure out whether we were successful
-        // or not.
         let mut found = false;
         for call in self.calls.borrow_mut().iter_mut() {
             if call.id() != call_id {
@@ -206,6 +218,10 @@ impl HoshiClient {
 
     pub fn public_key(&self) -> String {
         self.public_key.borrow().clone()
+    }
+
+    pub fn own_contact(&self) -> Contact {
+        Contact::new(self.public_key(), None)
     }
 
     pub fn set_public_key(&self, key: String) -> Result<()> {
@@ -310,9 +326,11 @@ impl HoshiClient {
                         let contact = self
                             .contact_get(&net_msg.from_key)
                             .unwrap_or_else(|| Contact::new(net_msg.from_key.clone(), None));
-                        self.calls
-                            .borrow_mut()
-                            .push(Call::from_invite(call_id, contact));
+                        self.calls.borrow_mut().push(Call::from_invite(
+                            call_id,
+                            contact,
+                            self.own_contact(),
+                        ));
                         self.calls_changed();
                     }
                 }
@@ -324,6 +342,7 @@ impl HoshiClient {
                     for call in self.calls.borrow_mut().iter_mut() {
                         if call.id() == &call_id {
                             call.set_party_status(&party_id, status);
+                            println!("{:?}", call);
                             break;
                         }
                     }
@@ -358,7 +377,7 @@ impl HoshiClient {
         self.calls.borrow_mut().retain_mut(|call| {
             msgs += 1;
             call.step(self);
-            call.is_active(self)
+            call.active_or_ringing_party_count() > 1
         });
         if self.calls.borrow().len() != before {
             self.calls_changed();

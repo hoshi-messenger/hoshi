@@ -35,10 +35,13 @@ impl Call {
         }
     }
 
-    pub fn from_invite(id: String, caller: Contact) -> Self {
+    pub fn from_invite(id: String, caller: Contact, own_contact: Contact) -> Self {
+        let mut caller: CallParty = caller.into();
+        caller.status = CallPartyStatus::Active;
+
         Self {
             id,
-            parties: vec![caller.into()],
+            parties: vec![caller, own_contact.into()],
             last_invite: None,
             call_started: Some(Instant::now()),
             call_ended: None,
@@ -47,14 +50,25 @@ impl Call {
         }
     }
 
-    pub fn is_active(&self, client: &HoshiClient) -> bool {
-        let public_key = client.public_key();
-        for party in self.parties.iter() {
-            if party.contact.public_key == public_key {
-                return true;
-            }
-        }
-        false
+    pub fn active_party_count(&self) -> usize {
+        self.parties
+            .iter()
+            .filter(|p| match p.status {
+                CallPartyStatus::Active => true,
+                _ => false,
+            })
+            .count()
+    }
+
+    pub fn active_or_ringing_party_count(&self) -> usize {
+        self.parties
+            .iter()
+            .filter(|p| match p.status {
+                CallPartyStatus::Ringing => true,
+                CallPartyStatus::Active => true,
+                _ => false,
+            })
+            .count()
     }
 
     pub fn update_last_ring(&mut self) {
@@ -91,19 +105,47 @@ impl Call {
         }
     }
 
-    pub fn add_party(&mut self, contact: Contact) -> bool {
-        if self.get_status(&contact.public_key).is_some() {
+    pub fn add_party(&mut self, party: CallParty) -> bool {
+        if self.get_status(&party.contact.public_key).is_some() {
             return false;
         }
-        self.parties.push(contact.into());
+        self.parties.push(party);
         true
     }
 
-    pub fn get_party_names(&self) -> Vec<String> {
-        self.parties
+    pub fn get_call_label(&self, own_contact: Contact) -> String {
+        let names = self
+            .parties
             .iter()
+            .filter(|p| p.contact.public_key != own_contact.public_key)
             .map(|p| p.contact.alias.clone())
-            .collect()
+            .collect::<Vec<_>>();
+
+        if let Some(status) = self.get_status(&own_contact.public_key) {
+            match status {
+                CallPartyStatus::Active => {
+                    if self.active_party_count() > 1 {
+                        let s = self
+                            .call_started
+                            .map(|s| s.elapsed().as_secs())
+                            .unwrap_or_default();
+                        let m = s / 60;
+                        let s = s % 60;
+                        format!("Call {} - {:02}:{:02}", names.join(", "), m, s)
+                    } else {
+                        format!("Calling {}", names.join(", "))
+                    }
+                }
+                CallPartyStatus::HungUp => {
+                    format!("Call ended with: {}", names.join(", "))
+                }
+                CallPartyStatus::Ringing => {
+                    format!("Incoming call from {}", names.join(", "))
+                }
+            }
+        } else {
+            format!("Call ended with: {}", names.join(", "))
+        }
     }
 
     pub fn get_party_public_keys(&self) -> Vec<String> {
