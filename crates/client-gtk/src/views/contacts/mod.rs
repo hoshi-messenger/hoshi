@@ -3,7 +3,7 @@ mod modals;
 
 use adw::{Avatar, NavigationPage, NavigationSplitView, prelude::*};
 use gtk::{Box, Button, Image, Label, ListBox, ListBoxRow, ScrolledWindow};
-use hoshi_clientlib::Contact;
+use hoshi_clientlib::{CallPartyStatus, Contact};
 
 use crate::AppState;
 
@@ -73,6 +73,30 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
             let state = state.clone();
             let contact = contact.clone();
             call_button.connect_clicked(move |_| {
+                let calls = state.client.calls();
+
+                // First we stop if the contact is already in a call we're in
+                for call in &calls {
+                    if call.get_status(&contact.public_key).is_some() {
+                        return;
+                    }
+                }
+
+                // Then we try and invite them to the first call we're active in
+                let public_key = state.client.public_key();
+                for call in &calls {
+                    if matches!(call.get_status(&public_key), Some(CallPartyStatus::Active)) {
+                        if state
+                            .client
+                            .call_set_status(call.id(), contact.clone(), CallPartyStatus::Ringing)
+                            .is_ok()
+                        {
+                            return;
+                        }
+                    }
+                }
+
+                // Finally just create a new call and call them
                 let parties = vec![contact.clone()];
                 state.client.call_start(parties);
             });

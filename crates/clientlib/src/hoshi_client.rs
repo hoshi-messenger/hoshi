@@ -176,14 +176,24 @@ impl HoshiClient {
         None
     }
 
-    pub fn call_set_status(&self, call_id: &str, status: CallPartyStatus) -> Result<()> {
+    pub fn calls(&self) -> Vec<Call> {
+        self.calls.borrow().clone()
+    }
+
+    pub fn call_set_status(
+        &self,
+        call_id: &str,
+        contact: Contact,
+        status: CallPartyStatus,
+    ) -> Result<()> {
         let mut found = false;
         for call in self.calls.borrow_mut().iter_mut() {
             if call.id() != call_id {
                 continue;
             }
 
-            let public_key = self.public_key();
+            let public_key = contact.public_key.clone();
+            call.add_party(contact.clone().into());
             call.set_party_status(&public_key, status);
             for key in call.get_party_public_keys() {
                 self.net.send(HoshiMessage::new(
@@ -209,11 +219,11 @@ impl HoshiClient {
     }
 
     pub fn call_accept(&self, call_id: &str) -> Result<()> {
-        self.call_set_status(call_id, CallPartyStatus::Active)
+        self.call_set_status(call_id, self.own_contact(), CallPartyStatus::Active)
     }
 
     pub fn call_decline(&self, call_id: &str) -> Result<()> {
-        self.call_set_status(call_id, CallPartyStatus::HungUp)
+        self.call_set_status(call_id, self.own_contact(), CallPartyStatus::HungUp)
     }
 
     pub fn public_key(&self) -> String {

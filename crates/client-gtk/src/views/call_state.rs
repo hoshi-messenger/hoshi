@@ -87,15 +87,13 @@ impl CallBanner {
             let revealer = revealer.clone();
 
             glib::timeout_add_local(Duration::from_millis(500), move || {
-                if !revealer.is_child_revealed() {
-                    glib::ControlFlow::Break
+                if revealer.is_child_revealed()
+                    && let Some(call) = state.client.call_get(&current_call_id)
+                {
+                    label.set_label(&call.get_call_label(state.client.own_contact()));
+                    glib::ControlFlow::Continue
                 } else {
-                    if let Some(call) = state.client.call_get(&current_call_id) {
-                        label.set_label(&call.get_call_label(state.client.own_contact()));
-                        glib::ControlFlow::Continue
-                    } else {
-                        glib::ControlFlow::Break
-                    }
+                    glib::ControlFlow::Break
                 }
             });
         }
