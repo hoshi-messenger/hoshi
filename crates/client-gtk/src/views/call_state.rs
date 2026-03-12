@@ -15,8 +15,6 @@ struct CallBanner {
 
 impl CallBanner {
     pub fn new(state: AppState, call: Call) -> Self {
-        println!("Adding revealer for {}", call.id());
-
         let revealer = Revealer::builder()
             .transition_type(RevealerTransitionType::SlideDown)
             .transition_duration(300)
@@ -132,7 +130,6 @@ impl CallBanner {
     }
 
     pub fn close(&self) {
-        println!("Dropping revealer");
         self.revealer.set_reveal_child(false);
     }
 }

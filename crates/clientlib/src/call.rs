@@ -189,42 +189,22 @@ impl Call {
             .unwrap_or(0.0)
     }
 
-    pub fn stop(&self) {
-        // ToDo: inform other parties
-    }
-
-    /// Receives an incoming audio chunk, decodes it, upsamples from 24kHz to 48kHz,
-    /// and writes it to the audio sink.
-    pub fn receive_audio(&mut self, chunk: AudioChunk, from_key: &str) {
-        let decoded = chunk.decode_i16(); // i16 samples at 24kHz
-
-        // RMS voice activity
-        let activity = if decoded.is_empty() {
-            0.0
-        } else {
-            let sum_sq: f32 = decoded
-                .iter()
-                .map(|&s| {
-                    let f = s as f32 / 32768.0;
-                    f * f
-                })
-                .sum();
-            (sum_sq / decoded.len() as f32).sqrt()
-        };
-
-        if let Some(party) = self
-            .parties
-            .iter_mut()
-            .find(|p| p.contact.public_key == from_key)
-        {
-            party.voice_activity = activity;
-        }
-
-        // Upsample 24kHz → 48kHz by repeating each sample
-        let upsampled: Vec<i16> = decoded.iter().flat_map(|&s| [s, s]).collect();
-
+    /// Receives an incoming audio chunk, decodes it and writes it to the audio sink.
+    pub fn receive_audio(&mut self, chunk: AudioChunk, _from_key: &str) {
         if let Some(sink) = self.audio_sink.borrow().as_ref() {
-            sink.write(&upsampled);
+            let samples = chunk.decode_i16(); // i16 samples at 24kHz
+            let samples = match chunk.sample_rate() {
+                24000 => {
+                    // Upsample 24kHz → 48kHz by repeating each sample
+                    samples.iter().flat_map(|&s| [s, s]).collect()
+                }
+                48000 => samples,
+                _ => {
+                    eprintln!("Invalid sample_rate {}", chunk.sample_rate());
+                    samples
+                }
+            };
+            sink.write(&samples);
         }
     }
 
@@ -278,24 +258,18 @@ impl Call {
             .collect();
 
         // Read 20ms of mono i16 audio at 48kHz (960 samples)
-        let mut buf_48 = [0i16; 960];
+        let mut samples_48k = [0i16; 960];
         if let Some(source) = self.audio_source.borrow().as_ref() {
-            source.read(&mut buf_48);
+            source.read(&mut samples_48k);
         }
 
-        // Downsample 48kHz → 24kHz by averaging pairs of samples
-        let samples_24: Vec<i16> = buf_48
-            .chunks(2)
-            .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2) as i16)
-            .collect();
-
         // Encode as μ-law
-        let encoded: Vec<u8> = samples_24.iter().map(|&s| linear_to_ulaw(s)).collect();
+        let encoded: Vec<u8> = samples_48k.iter().map(|&s| linear_to_ulaw(s)).collect();
 
         let chunk = AudioChunk::ULaw {
             id: call_id.clone(),
             chunk_offset: 0,
-            sample_rate: 24_000,
+            sample_rate: 48_000,
             samples: encoded,
         };
 
