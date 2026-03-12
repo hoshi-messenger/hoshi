@@ -1,9 +1,9 @@
-use std::time::Instant;
+use std::{cell::RefCell, rc::Rc, time::Instant};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Contact,
+    AudioInterfaceSink, AudioInterfaceSource, Contact,
     audio_chunk::{AudioChunk, linear_to_ulaw},
     hoshi_client::HoshiClient,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
@@ -13,6 +13,9 @@ use crate::{
 pub struct Call {
     id: String,
     parties: Vec<CallParty>,
+
+    pub(crate) audio_sink: Rc<RefCell<Option<Box<dyn AudioInterfaceSink>>>>,
+    pub(crate) audio_source: Rc<RefCell<Option<Box<dyn AudioInterfaceSource>>>>,
 
     last_audio_send: Option<Instant>,
     last_invite: Option<Instant>,
@@ -27,6 +30,8 @@ impl Call {
         Self {
             id: uuid::Uuid::now_v7().to_string(),
             parties,
+            audio_sink: Rc::new(RefCell::new(None)),
+            audio_source: Rc::new(RefCell::new(None)),
             last_invite: None,
             call_started: Some(Instant::now()),
             call_ended: None,
@@ -42,12 +47,22 @@ impl Call {
         Self {
             id,
             parties: vec![caller, own_contact.into()],
+            audio_sink: Rc::new(RefCell::new(None)),
+            audio_source: Rc::new(RefCell::new(None)),
             last_invite: None,
             call_started: Some(Instant::now()),
             call_ended: None,
             last_ring: Some(Instant::now()),
             last_audio_send: None,
         }
+    }
+
+    pub fn set_audio_sink(&self, sink: Option<Box<dyn AudioInterfaceSink>>) {
+        *self.audio_sink.borrow_mut() = sink;
+    }
+
+    pub fn set_audio_source(&self, source: Option<Box<dyn AudioInterfaceSource>>) {
+        *self.audio_source.borrow_mut() = source;
     }
 
     pub fn active_party_count(&self) -> usize {
@@ -180,7 +195,7 @@ impl Call {
 
     /// Receives an incoming audio chunk, decodes it, upsamples from 24kHz to 48kHz,
     /// and writes it to the audio sink.
-    pub fn receive_audio(&mut self, chunk: AudioChunk, from_key: &str, client: &HoshiClient) {
+    pub fn receive_audio(&mut self, chunk: AudioChunk, from_key: &str) {
         let decoded = chunk.decode_i16(); // i16 samples at 24kHz
 
         // RMS voice activity
@@ -208,7 +223,7 @@ impl Call {
         // Upsample 24kHz → 48kHz by repeating each sample
         let upsampled: Vec<i16> = decoded.iter().flat_map(|&s| [s, s]).collect();
 
-        if let Some(sink) = client.audio_sink.borrow().as_ref() {
+        if let Some(sink) = self.audio_sink.borrow().as_ref() {
             sink.write(&upsampled);
         }
     }
@@ -237,11 +252,11 @@ impl Call {
 
         // --- Audio: start/stop sink and source based on party status ---
         if self.parties.len() > 1 {
-            client.audio_sink.borrow().as_ref().map(|s| s.play());
-            client.audio_source.borrow().as_ref().map(|s| s.play());
+            self.audio_sink.borrow().as_ref().map(|s| s.play());
+            self.audio_source.borrow().as_ref().map(|s| s.play());
         } else {
-            client.audio_sink.borrow().as_ref().map(|s| s.pause());
-            client.audio_source.borrow().as_ref().map(|s| s.pause());
+            self.audio_sink.borrow().as_ref().map(|s| s.pause());
+            self.audio_source.borrow().as_ref().map(|s| s.pause());
         }
 
         // --- Capture and send audio every 20ms ---
@@ -264,7 +279,7 @@ impl Call {
 
         // Read 20ms of mono i16 audio at 48kHz (960 samples)
         let mut buf_48 = [0i16; 960];
-        if let Some(source) = client.audio_source.borrow().as_ref() {
+        if let Some(source) = self.audio_source.borrow().as_ref() {
             source.read(&mut buf_48);
         }
 

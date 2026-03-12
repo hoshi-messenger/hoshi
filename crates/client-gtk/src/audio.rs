@@ -6,7 +6,10 @@ use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SampleFormat, Stream};
 
-use hoshi_clientlib::{AUDIO_INTERFACE_SAMPLE_RATE, AudioInterfaceSink, AudioInterfaceSource};
+use hoshi_clientlib::{
+    AUDIO_INTERFACE_SAMPLE_RATE, AudioInterface, AudioInterfaceSink, AudioInterfaceSource, Call,
+    HoshiClient,
+};
 
 use crate::AppState;
 
@@ -19,6 +22,12 @@ struct ClientSink {
     stream: Stream,
     playing: RefCell<bool>,
     buffer: Arc<Mutex<VecDeque<i16>>>,
+}
+
+impl std::fmt::Debug for ClientSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ClientSink")
+    }
 }
 
 impl AudioInterfaceSink for ClientSink {
@@ -57,6 +66,12 @@ struct ClientSource {
     stream: Stream,
     playing: RefCell<bool>,
     buffer: Arc<Mutex<VecDeque<i16>>>,
+}
+
+impl std::fmt::Debug for ClientSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ClientSource")
+    }
 }
 
 impl AudioInterfaceSource for ClientSource {
@@ -233,10 +248,30 @@ impl ClientSource {
     }
 }
 
+#[derive(Debug)]
+struct ClientInterface {}
+
+impl ClientInterface {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl AudioInterface for ClientInterface {
+    fn create(
+        &self,
+        _client: &HoshiClient,
+        _call: &Call,
+    ) -> Result<(Box<dyn AudioInterfaceSink>, Box<dyn AudioInterfaceSource>)> {
+        let sink = ClientSink::new()?;
+        let source = ClientSource::new()?;
+
+        Ok((Box::new(sink), Box::new(source)))
+    }
+}
+
 pub fn init_audio_interfaces(state: AppState) -> Result<()> {
-    let sink = ClientSink::new()?;
-    let source = ClientSource::new()?;
-    state.client.set_audio_sink(Some(Box::new(sink)));
-    state.client.set_audio_source(Some(Box::new(source)));
+    let interface = ClientInterface::new();
+    state.client.set_audio_interface(Some(Box::new(interface)));
     Ok(())
 }

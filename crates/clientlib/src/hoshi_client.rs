@@ -9,7 +9,7 @@ use rand_core::{OsRng, RngCore};
 use anyhow::{Result, anyhow};
 
 use crate::{
-    AudioInterfaceSink, AudioInterfaceSource, Call, ChatMessage, Contact, Database, HoshiNetClient,
+    AudioInterface, Call, ChatMessage, Contact, Database, HoshiNetClient,
     call::{CallParty, CallPartyStatus},
     database::DBReply,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
@@ -20,8 +20,7 @@ pub struct HoshiClient {
     db: Database,
     public_key: RefCell<String>,
 
-    pub(crate) audio_sink: RefCell<Option<Box<dyn AudioInterfaceSink>>>,
-    pub(crate) audio_source: RefCell<Option<Box<dyn AudioInterfaceSource>>>,
+    pub(crate) audio_interface: RefCell<Option<Box<dyn AudioInterface>>>,
 
     calls: RefCell<Vec<Call>>,
     calls_watchers: RefCell<Vec<Box<dyn Fn(&Vec<Call>)>>>,
@@ -83,8 +82,7 @@ impl HoshiClient {
             db,
             public_key: RefCell::new(public_key),
 
-            audio_sink: RefCell::new(None),
-            audio_source: RefCell::new(None),
+            audio_interface: RefCell::new(None),
 
             calls: incoming_calls,
             calls_watchers: incoming_call_watchers,
@@ -97,12 +95,8 @@ impl HoshiClient {
         })
     }
 
-    pub fn set_audio_sink(&self, sink: Option<Box<dyn AudioInterfaceSink>>) {
-        *self.audio_sink.borrow_mut() = sink;
-    }
-
-    pub fn set_audio_source(&self, source: Option<Box<dyn AudioInterfaceSource>>) {
-        *self.audio_source.borrow_mut() = source;
+    pub fn set_audio_interface(&self, interface: Option<Box<dyn AudioInterface>>) {
+        *self.audio_interface.borrow_mut() = interface;
     }
 
     fn request_chat_messages(&self, contact: &Contact) {
@@ -133,7 +127,14 @@ impl HoshiClient {
         let mut party: CallParty = self.own_contact().into();
         party.status = CallPartyStatus::Active;
         call.add_party(party);
-        println!("Call Start: {:?}", call);
+
+        if let Some(interface) = self.audio_interface.borrow().as_ref() {
+            if let Ok((sink, source)) = interface.create(self, &call) {
+                call.set_audio_sink(Some(sink));
+                call.set_audio_source(Some(source));
+            }
+        }
+
         self.calls.borrow_mut().push(call);
 
         self.calls_changed();
@@ -336,11 +337,15 @@ impl HoshiClient {
                         let contact = self
                             .contact_get(&net_msg.from_key)
                             .unwrap_or_else(|| Contact::new(net_msg.from_key.clone(), None));
-                        self.calls.borrow_mut().push(Call::from_invite(
-                            call_id,
-                            contact,
-                            self.own_contact(),
-                        ));
+                        let call = Call::from_invite(call_id, contact, self.own_contact());
+                        if let Some(interface) = self.audio_interface.borrow().as_ref() {
+                            if let Ok((sink, source)) = interface.create(self, &call) {
+                                call.set_audio_sink(Some(sink));
+                                call.set_audio_source(Some(source));
+                            }
+                        }
+
+                        self.calls.borrow_mut().push(call);
                         self.calls_changed();
                     }
                 }
@@ -360,7 +365,7 @@ impl HoshiClient {
                 HoshiPayload::AudioChunk { call_id, chunk } => {
                     for call in self.calls.borrow_mut().iter_mut() {
                         if call.id() == &call_id {
-                            call.receive_audio(chunk, &net_msg.from_key, self);
+                            call.receive_audio(chunk, &net_msg.from_key);
                             break;
                         }
                     }
