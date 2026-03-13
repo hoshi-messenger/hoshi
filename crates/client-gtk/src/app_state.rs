@@ -21,15 +21,15 @@ pub struct AppState {
 }
 
 fn add_css() {
-    let bytes = include_bytes!("../assets/chat_bg.png");
+    let bytes = include_bytes!("../assets/chat_bg.jpg");
     let b64 = BASE64_STANDARD.encode(bytes); // using the `base64` crate
 
     let provider = CssProvider::new();
     provider.load_from_string(&format!(
         "
         .chat-background {{
-            background-image: url('data:image/png;base64,{b64}');
-            background-repeat: repeat;
+            background-image: url('data:image/jpeg;base64,{b64}');
+            background-size: cover;
         }}
 
         .chat-message {{
