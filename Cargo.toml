@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/bot-echo",
     "crates/control-plane",
     "crates/client-gtk",
     "crates/clientlib",

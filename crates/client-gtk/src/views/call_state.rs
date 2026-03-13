@@ -150,7 +150,7 @@ pub fn init_call_banner(state: AppState) {
     let revealer_map: RefCell<HashMap<String, CallBanner>> = RefCell::new(HashMap::new());
 
     let watcher_state = state.clone();
-    state.client.calls_watch(move |calls| {
+    state.client.calls_watch(move |_, calls| {
         let mut revealer_map = revealer_map.borrow_mut();
 
         for call in calls.iter() {

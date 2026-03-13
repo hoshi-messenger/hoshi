@@ -2,10 +2,14 @@ use anyhow::Result;
 
 use crate::{Call, HoshiClient};
 
-pub trait AudioInterfaceSink: std::fmt::Debug {
+pub trait AudioStream: std::fmt::Debug {
     /// Gets called by the clientlib and the samples should be played back over the
     /// associated sink
     fn write(&self, channel: usize, samples: &[i16]) -> usize;
+
+    /// Gets called by the clientlib if it needs audio data for a call, if paued should fill
+    /// buf with 0
+    fn read(&self, buf: &mut [i16]) -> usize;
 
     /// Gets called by the clientlib before we start calling write
     ///
@@ -18,32 +22,12 @@ pub trait AudioInterfaceSink: std::fmt::Debug {
     fn pause(&self);
 }
 
-pub trait AudioInterfaceSource: std::fmt::Debug {
-    /// Gets called by the clientlib if it needs audio data for a call, if paued should fill
-    /// buf with 0
-    fn read(&self, buf: &mut [i16]) -> usize;
-
-    /// Gets called by the clientlib before we call read, mainly because a call is about to start
-    ///
-    /// Can safely be called if already playing
-    fn play(&self);
-
-    /// Gets called by the clientlib after a call concluded and we'll stop calling read for a while
-    ///
-    /// Can safely be called if already paused
-    fn pause(&self);
-}
-
 pub trait AudioInterface: std::fmt::Debug {
     /// The main entry point, the idea is that whenever we start/get a new call we create
     /// a new audio interface, this allows clients to handle multiple calls and simplify
     /// various bot usecases (Echo Service for example). Additionally we only open a connection
     /// when it's needed not before.
-    fn create(
-        &self,
-        client: &HoshiClient,
-        call: &Call,
-    ) -> Result<(Box<dyn AudioInterfaceSink>, Box<dyn AudioInterfaceSource>)>;
+    fn create(&self, client: &HoshiClient, call: &Call) -> Result<Box<dyn AudioStream>>;
 }
 
 /// To keep things simple we just force the sample rate to be 48KHz for now, should be good enough for voice calls

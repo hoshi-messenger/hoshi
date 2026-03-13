@@ -3,7 +3,7 @@ use std::{cell::RefCell, f32::consts::PI, ops::Rem, rc::Rc, time::Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AudioInterfaceSink, AudioInterfaceSource, Contact,
+    AudioStream, Contact,
     audio_chunk::{AudioChunk, linear_to_ulaw},
     hoshi_client::HoshiClient,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
@@ -14,8 +14,7 @@ pub struct Call {
     id: String,
     parties: Vec<CallParty>,
 
-    pub(crate) audio_sink: Rc<RefCell<Option<Box<dyn AudioInterfaceSink>>>>,
-    pub(crate) audio_source: Rc<RefCell<Option<Box<dyn AudioInterfaceSource>>>>,
+    pub(crate) audio: Rc<RefCell<Option<Box<dyn AudioStream>>>>,
 
     ring_samples_written: usize,
     last_audio_send: Option<Instant>,
@@ -56,8 +55,7 @@ impl Call {
         Self {
             id: uuid::Uuid::now_v7().to_string(),
             parties,
-            audio_sink: Rc::new(RefCell::new(None)),
-            audio_source: Rc::new(RefCell::new(None)),
+            audio: Rc::new(RefCell::new(None)),
             ring_samples_written: 0,
             last_invite: None,
             call_started: Instant::now(),
@@ -74,8 +72,7 @@ impl Call {
         Self {
             id,
             parties: vec![caller, own_contact.into()],
-            audio_sink: Rc::new(RefCell::new(None)),
-            audio_source: Rc::new(RefCell::new(None)),
+            audio: Rc::new(RefCell::new(None)),
             last_invite: None,
             call_started: Instant::now(),
             ring_samples_written: 0,
@@ -85,12 +82,8 @@ impl Call {
         }
     }
 
-    pub fn set_audio_sink(&self, sink: Option<Box<dyn AudioInterfaceSink>>) {
-        *self.audio_sink.borrow_mut() = sink;
-    }
-
-    pub fn set_audio_source(&self, source: Option<Box<dyn AudioInterfaceSource>>) {
-        *self.audio_source.borrow_mut() = source;
+    pub fn set_audio(&self, sink: Option<Box<dyn AudioStream>>) {
+        *self.audio.borrow_mut() = sink;
     }
 
     pub fn active_party_count(&self) -> usize {
@@ -199,7 +192,7 @@ impl Call {
     /// Receives an incoming audio chunk, decodes it and writes it to the audio sink.
     pub fn receive_audio(&mut self, chunk: AudioChunk, from_key: &str) {
         if let Some(party_index) = self.get_party_index(from_key) {
-            if let Some(sink) = self.audio_sink.borrow().as_ref() {
+            if let Some(sink) = self.audio.borrow().as_ref() {
                 let samples = chunk.decode_i16(); // i16 samples at 24kHz
                 let samples = match chunk.sample_rate() {
                     24000 => {
@@ -241,11 +234,9 @@ impl Call {
 
         // --- Audio: start/stop sink and source based on party status ---
         if self.parties.len() > 1 {
-            self.audio_sink.borrow().as_ref().map(|s| s.play());
-            self.audio_source.borrow().as_ref().map(|s| s.play());
+            self.audio.borrow().as_ref().map(|s| s.play());
         } else {
-            self.audio_sink.borrow().as_ref().map(|s| s.pause());
-            self.audio_source.borrow().as_ref().map(|s| s.pause());
+            self.audio.borrow().as_ref().map(|s| s.pause());
         }
 
         // --- Capture and send audio every 20ms ---
@@ -279,7 +270,7 @@ impl Call {
                         };
                     });
                     self.ring_samples_written += 2048;
-                    if let Some(sink) = self.audio_sink.borrow().as_ref() {
+                    if let Some(sink) = self.audio.borrow().as_ref() {
                         sink.write(0, &samples_48k);
                     }
                 };
@@ -336,15 +327,15 @@ impl Call {
                     }
                 });
                 self.ring_samples_written += 2048;
-                if let Some(sink) = self.audio_sink.borrow().as_ref() {
+                if let Some(sink) = self.audio.borrow().as_ref() {
                     sink.write(0, &samples_48k);
                 }
             }
             return;
         }
 
-        let mut samples_48k = [0i16; 2048];
-        if let Some(source) = self.audio_source.borrow().as_ref() {
+        let mut samples_48k = [0i16; 1024];
+        if let Some(source) = self.audio.borrow().as_ref() {
             let samples_read = source.read(&mut samples_48k);
             // If we don't have enough data buffered we'll just return and send data the next time
             if samples_read == 0 {

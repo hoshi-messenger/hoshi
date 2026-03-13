@@ -23,7 +23,7 @@ pub struct HoshiClient {
     pub(crate) audio_interface: RefCell<Option<Box<dyn AudioInterface>>>,
 
     calls: RefCell<Vec<Call>>,
-    calls_watchers: RefCell<Vec<Box<dyn Fn(&Vec<Call>)>>>,
+    calls_watchers: RefCell<Vec<Box<dyn Fn(&Self, &Vec<Call>)>>>,
 
     contacts: RefCell<HashMap<String, Contact>>,
     contacts_watchers: RefCell<Vec<Box<dyn Fn(&HashMap<String, Contact>)>>>,
@@ -129,9 +129,8 @@ impl HoshiClient {
         call.add_party(party);
 
         if let Some(interface) = self.audio_interface.borrow().as_ref() {
-            if let Ok((sink, source)) = interface.create(self, &call) {
-                call.set_audio_sink(Some(sink));
-                call.set_audio_source(Some(source));
+            if let Ok(stream) = interface.create(self, &call) {
+                call.set_audio(Some(stream));
             }
         }
 
@@ -151,15 +150,15 @@ impl HoshiClient {
     fn calls_changed(&self) {
         let calls = self.calls.borrow().clone();
         for f in self.calls_watchers.borrow().iter() {
-            f(&calls);
+            f(self, &calls);
         }
     }
 
     pub fn calls_watch<F>(&self, f: F)
     where
-        F: Fn(&Vec<Call>) + 'static,
+        F: Fn(&Self, &Vec<Call>) + 'static,
     {
-        f(&self.calls.borrow());
+        f(self, &self.calls.borrow());
         self.calls_watchers.borrow_mut().push(Box::new(f));
     }
 
@@ -339,9 +338,8 @@ impl HoshiClient {
                             .unwrap_or_else(|| Contact::new(net_msg.from_key.clone(), None));
                         let call = Call::from_invite(call_id, contact, self.own_contact());
                         if let Some(interface) = self.audio_interface.borrow().as_ref() {
-                            if let Ok((sink, source)) = interface.create(self, &call) {
-                                call.set_audio_sink(Some(sink));
-                                call.set_audio_source(Some(source));
+                            if let Ok(stream) = interface.create(self, &call) {
+                                call.set_audio(Some(stream));
                             }
                         }
 
