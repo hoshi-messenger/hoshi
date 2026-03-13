@@ -5,7 +5,7 @@ use crate::{Call, HoshiClient};
 pub trait AudioInterfaceSink: std::fmt::Debug {
     /// Gets called by the clientlib and the samples should be played back over the
     /// associated sink
-    fn write(&self, samples: &[i16]) -> usize;
+    fn write(&self, channel: usize, samples: &[i16]) -> usize;
 
     /// Gets called by the clientlib before we start calling write
     ///

@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AudioChunk {
     ULaw {
-        id: String,
-        chunk_offset: i32,
         sample_rate: u16,
         /// μ-law encoded PCM, one byte per sample
         samples: Vec<u8>,
@@ -12,18 +10,6 @@ pub enum AudioChunk {
 }
 
 impl AudioChunk {
-    pub fn id(&self) -> &str {
-        match self {
-            Self::ULaw { id, .. } => id,
-        }
-    }
-
-    pub fn chunk_offset(&self) -> i32 {
-        match self {
-            Self::ULaw { chunk_offset, .. } => *chunk_offset,
-        }
-    }
-
     pub fn sample_rate(&self) -> u16 {
         match self {
             Self::ULaw { sample_rate, .. } => *sample_rate,

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
@@ -13,15 +13,15 @@ use hoshi_clientlib::{
 
 use crate::AppState;
 
-/// Sink cap: ~200ms at 48kHz. Bounds playback latency; older samples are dropped when exceeded.
-const SINK_BUFFER_CAP: usize = 9_600;
+/// Sink cap: ~100ms at 48kHz. Bounds playback latency; older samples are dropped when exceeded.
+const SINK_BUFFER_CAP: usize = 8192;
 /// Source cap: ~100ms at 48kHz. Oldest samples are dropped when exceeded to keep audio live.
-const SOURCE_BUFFER_CAP: usize = 4_800;
+const SOURCE_BUFFER_CAP: usize = 4096;
 
 struct ClientSink {
     stream: Stream,
     playing: RefCell<bool>,
-    buffer: Arc<Mutex<VecDeque<i16>>>,
+    buffers: Arc<Mutex<HashMap<usize, VecDeque<i16>>>>,
 }
 
 impl std::fmt::Debug for ClientSink {
@@ -31,16 +31,21 @@ impl std::fmt::Debug for ClientSink {
 }
 
 impl AudioInterfaceSink for ClientSink {
-    fn write(&self, samples: &[i16]) -> usize {
+    fn write(&self, channel: usize, samples: &[i16]) -> usize {
         if !*self.playing.borrow() {
             return 0;
         }
-        let mut buf = self.buffer.lock().unwrap();
+        let mut buffers = self.buffers.lock().unwrap();
+        let buf = buffers.entry(channel).or_insert_with(VecDeque::new);
         buf.extend(samples.iter().copied());
         // If buffer exceeds cap, drop oldest samples to bound playback latency.
         if buf.len() > SINK_BUFFER_CAP {
+            println!("Sink buffer exceeded cap!");
             let excess = buf.len() - SINK_BUFFER_CAP;
             buf.drain(..excess);
+        }
+        if buf.len() < 1024 {
+            println!("Buffer dangerously small");
         }
         samples.len()
     }
@@ -83,6 +88,9 @@ impl AudioInterfaceSource for ClientSource {
             return buf.len();
         }
         let mut buffer = self.buffer.lock().unwrap();
+        if buffer.len() < buf.len() {
+            return 0;
+        }
         for s in buf.iter_mut() {
             *s = buffer.pop_front().unwrap_or(0);
         }
@@ -106,10 +114,32 @@ impl AudioInterfaceSource for ClientSource {
     }
 }
 
-fn fill_output<T: Sample + FromSample<i16>>(data: &mut [T], buffer: &Mutex<VecDeque<i16>>) {
-    let mut buf = buffer.lock().unwrap();
+fn fill_output<T: Sample + FromSample<i16>>(
+    data: &mut [T],
+    buffers: &Mutex<HashMap<usize, VecDeque<i16>>>,
+) {
+    let mut buffers = buffers.lock().unwrap();
+    /*
+    let mut buffers = match buffers.try_lock() {
+        Ok(b) => b,
+        Err(_) => {
+            eprintln!("MUTEX CONTENDED in callback!");
+            // fill with silence and return
+            data.iter_mut().for_each(|s| *s = T::from_sample(0i16));
+            return;
+        }
+    };
+
+    let sizes: Vec<_> = buffers.iter().map(|(k, v)| (k, v.len())).collect();
+    eprintln!("callback: requesting {} samples, deque sizes: {:?}", data.len(), sizes);
+     */
+
     for out in data.iter_mut() {
-        *out = T::from_sample(buf.pop_front().unwrap_or(0i16));
+        let mixed: i32 = buffers
+            .values_mut()
+            .map(|deque| deque.pop_front().unwrap_or(0i16) as i32)
+            .sum();
+        *out = T::from_sample(mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
     }
 }
 
@@ -139,18 +169,27 @@ impl ClientSink {
                 c.channels() == 1
                     && c.min_sample_rate().0 <= AUDIO_INTERFACE_SAMPLE_RATE
                     && c.max_sample_rate().0 >= AUDIO_INTERFACE_SAMPLE_RATE
+                    && (matches!(c.sample_format(), SampleFormat::I16)
+                        || matches!(c.sample_format(), SampleFormat::U16)
+                        || matches!(c.sample_format(), SampleFormat::F32))
             })
             .ok_or(anyhow!("Output device does not support mono 48kHz"))?
             .with_sample_rate(cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE));
 
+        println!("{:?}", supported);
+
         let sample_format = supported.sample_format();
-        let config: cpal::StreamConfig = supported.into();
+        let config = cpal::StreamConfig {
+            channels: 1,
+            sample_rate: cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE),
+            buffer_size: cpal::BufferSize::Fixed(4096),
+        };
 
-        let buffer: Arc<Mutex<VecDeque<i16>>> = Arc::new(Mutex::new(VecDeque::new()));
-
+        let buffers: Arc<Mutex<HashMap<usize, VecDeque<i16>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         let err_fn = |err| eprintln!("Output stream error: {err}");
 
-        let b = Arc::clone(&buffer);
+        let b = Arc::clone(&buffers);
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
                 &config,
@@ -170,19 +209,13 @@ impl ClientSink {
                 err_fn,
                 None,
             ),
-            SampleFormat::U8 => device.build_output_stream(
-                &config,
-                move |data: &mut [u8], _| fill_output(data, &b),
-                err_fn,
-                None,
-            ),
             fmt => return Err(anyhow!("Unsupported output sample format: {fmt}")),
         }?;
 
         Ok(Self {
             stream,
             playing: RefCell::new(false),
-            buffer,
+            buffers,
         })
     }
 }
@@ -200,12 +233,19 @@ impl ClientSource {
                 c.channels() == 1
                     && c.min_sample_rate().0 <= AUDIO_INTERFACE_SAMPLE_RATE
                     && c.max_sample_rate().0 >= AUDIO_INTERFACE_SAMPLE_RATE
+                    && (matches!(c.sample_format(), SampleFormat::I16)
+                        || matches!(c.sample_format(), SampleFormat::U16)
+                        || matches!(c.sample_format(), SampleFormat::F32))
             })
             .ok_or(anyhow!("Input device does not support mono 48kHz"))?
             .with_sample_rate(cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE));
 
         let sample_format = supported.sample_format();
-        let config: cpal::StreamConfig = supported.into();
+        let config = cpal::StreamConfig {
+            channels: 1,
+            sample_rate: cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE),
+            buffer_size: cpal::BufferSize::Fixed(4096),
+        };
 
         let buffer: Arc<Mutex<VecDeque<i16>>> = Arc::new(Mutex::new(VecDeque::new()));
 
@@ -228,12 +268,6 @@ impl ClientSource {
             SampleFormat::U16 => device.build_input_stream(
                 &config,
                 move |data: &[u16], _| fill_input(data, &b),
-                err_fn,
-                None,
-            ),
-            SampleFormat::U8 => device.build_input_stream(
-                &config,
-                move |data: &[u8], _| fill_input(data, &b),
                 err_fn,
                 None,
             ),

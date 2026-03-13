@@ -365,7 +365,10 @@ impl HoshiClient {
                 HoshiPayload::AudioChunk { call_id, chunk } => {
                     for call in self.calls.borrow_mut().iter_mut() {
                         if call.id() == &call_id {
-                            call.receive_audio(chunk, &net_msg.from_key);
+                            let own_status = call.get_status(&self.public_key());
+                            if matches!(own_status, Some(CallPartyStatus::Active)) {
+                                call.receive_audio(chunk, &net_msg.from_key);
+                            }
                             break;
                         }
                     }
