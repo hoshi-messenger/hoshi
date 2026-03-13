@@ -11,13 +11,14 @@ struct CallBanner {
     pub label: Label,
     pub accept_btn: Button,
     pub decline_btn: Button,
+    pub close_scheduled: RefCell<bool>,
 }
 
 impl CallBanner {
     pub fn new(state: AppState, call: Call) -> Self {
         let revealer = Revealer::builder()
             .transition_type(RevealerTransitionType::SlideDown)
-            .transition_duration(300)
+            .transition_duration(500)
             .build();
 
         let row = CenterBox::builder()
@@ -101,6 +102,7 @@ impl CallBanner {
             label,
             accept_btn,
             decline_btn,
+            close_scheduled: RefCell::new(false),
         }
     }
 
@@ -130,7 +132,17 @@ impl CallBanner {
     }
 
     pub fn close(&self) {
-        self.revealer.set_reveal_child(false);
+        let mut scheduled = self.close_scheduled.borrow_mut();
+        if *scheduled {
+            return;
+        }
+        *scheduled = true;
+
+        let revealer = self.revealer.clone();
+        glib::timeout_add_local(Duration::from_millis(1000), move || {
+            revealer.set_reveal_child(false);
+            glib::ControlFlow::Break
+        });
     }
 }
 

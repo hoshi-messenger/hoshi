@@ -312,6 +312,7 @@ impl Call {
                     let i = i + self.ring_samples_written;
                     let t = (i as f32) * (1.0 / 48000.0);
 
+                    // DTMF Dialing - 32ms on - 16ms off
                     let digit_i = t * (1000.0 / 48.0);
                     let digit_phase = digit_i.rem(3.0);
                     let digit_i = (digit_i as usize) / 3;
