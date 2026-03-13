@@ -189,7 +189,7 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
         let chat = chat.clone();
         let client = &state.client;
         let state = state.clone();
-        client.contacts_watch(move |contacts| {
+        client.contacts_watch(move |client, contacts| {
             // More efficient diffing would be nice in the future, good enough for an MVP though
             if let Some(list) = list.upgrade() {
                 let selected = list.selected_row().map(|r| r.widget_name().to_string());
@@ -208,7 +208,7 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
                 }
 
                 if let Some(selected) = &selected {
-                    if state.client.contact_get(selected).is_none() {
+                    if client.contact_get(selected).is_none() {
                         view_chat_page(state.clone(), chat.clone(), None);
                         list.unselect_all();
                     }

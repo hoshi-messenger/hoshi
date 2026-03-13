@@ -137,7 +137,7 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
         let vbox = vbox.clone();
         state
             .client
-            .messages_watch(chat_id, move |_chat_id, messages| {
+            .messages_watch(chat_id, move |_, _chat_id, messages| {
                 let mut sorted = messages.values().collect::<Vec<&ChatMessage>>();
                 sorted.sort();
                 clear_box(&vbox);
