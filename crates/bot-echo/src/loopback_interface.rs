@@ -18,12 +18,10 @@ impl Loopback {
         let sink_buffers: Arc<Mutex<HashMap<usize, VecDeque<i16>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        let ret = Self {
+        Self {
             playing: RefCell::new(false),
             buffers: sink_buffers,
-        };
-
-        ret
+        }
     }
 }
 
@@ -94,7 +92,6 @@ impl LoopbackInterface {
 impl AudioInterface for LoopbackInterface {
     fn create(&self, _client: &HoshiClient, _call: &Call) -> Result<Box<dyn AudioStream>> {
         let stream = Loopback::new();
-
         Ok(Box::new(stream))
     }
 }

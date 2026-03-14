@@ -177,7 +177,7 @@ impl WebSocketPipe {
                             }
                         }
                     }
-                });
+                });   
             });
         }
 
