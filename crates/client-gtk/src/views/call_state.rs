@@ -112,7 +112,7 @@ impl CallBanner {
 
         if let Some(status) = call.get_status(&state.client.public_key()) {
             match status {
-                CallPartyStatus::Ringing => {
+                CallPartyStatus::Ringing | CallPartyStatus::Invited => {
                     self.accept_btn.set_visible(true);
                     self.decline_btn.add_css_class("destructive-action");
                     self.decline_btn.set_label("Decline");

@@ -245,10 +245,10 @@ impl HoshiClient {
                 .iter_mut()
                 .find(|c| c.id() == call_id)
                 .ok_or_else(|| anyhow!("Call {} not found", call_id))?;
-            call.add_event(CallPartyEvent::new(
-                contact.public_key.clone(),
-                CallPartyStatus::Ringing,
-            ));
+            call.add_event_with_contact(
+                CallPartyEvent::new(contact.public_key.clone(), CallPartyStatus::Invited),
+                contact,
+            );
             self.build_call_state_messages(call)
         };
         for msg in msgs {
@@ -387,22 +387,29 @@ impl HoshiClient {
                         }
                     }
                     if !found {
-                        let call =
-                            Call::from_events(call_id.clone(), events, &contact_lookup);
+                        let mut call = Call::from_events(call_id.clone(), events, &contact_lookup);
                         let own_status = call.get_status(&self.public_key());
-                        if matches!(own_status, Some(CallPartyStatus::Ringing)) {
+                        if matches!(own_status, Some(CallPartyStatus::Invited)) {
+                            // Transition from Invited to Ringing so other parties
+                            // know we received the call
+                            call.add_event(CallPartyEvent::new(
+                                self.public_key(),
+                                CallPartyStatus::Ringing,
+                            ));
+                            let msgs = self.build_call_state_messages(&call);
                             if let Some(interface) = self.audio_interface.borrow().as_ref() {
                                 if let Ok(stream) = interface.create(self, &call) {
                                     call.set_audio(Some(stream));
                                 }
                             }
                             self.calls.borrow_mut().push(call);
+                            for msg in msgs {
+                                self.net.send(msg);
+                            }
                         } else {
                             // We're not ringing in this call — send HungUp immediately
-                            let event = CallPartyEvent::new(
-                                self.public_key(),
-                                CallPartyStatus::HungUp,
-                            );
+                            let event =
+                                CallPartyEvent::new(self.public_key(), CallPartyStatus::HungUp);
                             self.net.send(HoshiMessage::new(
                                 self.public_key(),
                                 net_msg.from_key.clone(),

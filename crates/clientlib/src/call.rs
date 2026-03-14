@@ -53,11 +53,14 @@ fn dtmf_freqs(digit: char) -> Option<(f32, f32)> {
 impl Call {
     pub fn new(own_key: String, parties: Vec<Contact>) -> Self {
         let mut events = Vec::new();
-        events.push(CallPartyEvent::new(own_key.clone(), CallPartyStatus::Active));
+        events.push(CallPartyEvent::new(
+            own_key.clone(),
+            CallPartyStatus::Active,
+        ));
         for p in &parties {
             events.push(CallPartyEvent::new(
                 p.public_key.clone(),
-                CallPartyStatus::Ringing,
+                CallPartyStatus::Invited,
             ));
         }
 
@@ -116,7 +119,7 @@ impl Call {
     pub fn active_or_ringing_party_count(&self) -> usize {
         self.parties
             .iter()
-            .filter(|p| matches!(p.status, CallPartyStatus::Ringing | CallPartyStatus::Active))
+            .filter(|p| !matches!(p.status, CallPartyStatus::HungUp))
             .count()
     }
 
@@ -136,6 +139,22 @@ impl Call {
     }
 
     pub fn add_event(&mut self, event: CallPartyEvent) {
+        self.events.push(event);
+        self.rebuild_parties_simple();
+    }
+
+    pub fn add_event_with_contact(&mut self, event: CallPartyEvent, contact: Contact) {
+        // Ensure the contact is in parties before rebuilding so alias is preserved
+        if !self
+            .parties
+            .iter()
+            .any(|p| p.contact.public_key == contact.public_key)
+        {
+            self.parties.push(CallParty {
+                status: event.status(),
+                contact,
+            });
+        }
         self.events.push(event);
         self.rebuild_parties_simple();
     }
@@ -166,7 +185,11 @@ impl Call {
             }
         }
         for (key, status) in &status_map {
-            if let Some(party) = self.parties.iter_mut().find(|p| p.contact.public_key == *key) {
+            if let Some(party) = self
+                .parties
+                .iter_mut()
+                .find(|p| p.contact.public_key == *key)
+            {
                 party.status = *status;
             } else {
                 self.parties.push(CallParty {
@@ -189,7 +212,11 @@ impl Call {
             }
         }
         for (key, status) in &status_map {
-            if let Some(party) = self.parties.iter_mut().find(|p| p.contact.public_key == *key) {
+            if let Some(party) = self
+                .parties
+                .iter_mut()
+                .find(|p| p.contact.public_key == *key)
+            {
                 party.status = *status;
             } else {
                 self.parties.push(CallParty {
@@ -209,12 +236,20 @@ impl Call {
     }
 
     pub fn get_call_label(&self, own_contact: Contact) -> String {
-        let names = self
+        let other_parties: Vec<&CallParty> = self
             .parties
             .iter()
             .filter(|p| p.contact.public_key != own_contact.public_key)
-            .map(|p| p.contact.alias.clone())
-            .collect::<Vec<_>>();
+            .collect();
+
+        let names: Vec<String> = other_parties
+            .iter()
+            .map(|p| match p.status {
+                CallPartyStatus::Invited => format!("{} (dialing)", p.contact.alias),
+                CallPartyStatus::Ringing => format!("{} (ringing)", p.contact.alias),
+                _ => p.contact.alias.clone(),
+            })
+            .collect();
 
         if let Some(status) = self.get_status(&own_contact.public_key) {
             match status {
@@ -231,7 +266,7 @@ impl Call {
                 CallPartyStatus::HungUp => {
                     format!("Call ended with: {}", names.join(", "))
                 }
-                CallPartyStatus::Ringing => {
+                CallPartyStatus::Ringing | CallPartyStatus::Invited => {
                     format!("Incoming call from {}", names.join(", "))
                 }
             }
@@ -362,7 +397,12 @@ impl Call {
             let public_key = self
                 .parties
                 .iter()
-                .find(|c| matches!(c.status, CallPartyStatus::Ringing))
+                .find(|c| {
+                    matches!(
+                        c.status,
+                        CallPartyStatus::Ringing | CallPartyStatus::Invited
+                    )
+                })
                 .map(|c| c.contact.public_key.as_str())
                 .unwrap_or_default();
             let time_elapsed = self.call_started.elapsed().as_millis();
@@ -444,6 +484,7 @@ pub struct CallParty {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CallPartyStatus {
+    Invited,
     Ringing,
     HungUp,
     Active,
@@ -453,7 +494,7 @@ impl From<Contact> for CallParty {
     fn from(value: Contact) -> Self {
         Self {
             contact: value,
-            status: CallPartyStatus::Ringing,
+            status: CallPartyStatus::Invited,
         }
     }
 }
