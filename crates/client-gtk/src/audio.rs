@@ -13,7 +13,7 @@ use hoshi_clientlib::{
 use crate::AppState;
 
 /// Sink cap: ~100ms at 48kHz. Bounds playback latency; older samples are dropped when exceeded.
-const SINK_BUFFER_CAP: usize = 8192;
+const SINK_BUFFER_CAP: usize = 8192*2;
 /// Source cap: ~100ms at 48kHz. Oldest samples are dropped when exceeded to keep audio live.
 const SOURCE_BUFFER_CAP: usize = 4096;
 
