@@ -360,27 +360,48 @@ impl HoshiClient {
                     party_id,
                     status,
                 } => {
-                    let mut update_others = false;
                     for call in self.calls.borrow_mut().iter_mut() {
                         if call.id() == &call_id {
-                            if call
-                                .get_status(&party_id)
-                                .map(|o| o != status)
-                                .unwrap_or(true)
-                            {
-                                update_others = true;
-                            }
+                            let old_status = call.get_status(&party_id);
                             call.set_party_status(&party_id, status);
                             println!("{:?}", call);
+                            if matches!(status, CallPartyStatus::Active) {
+                                let update_others = if let Some(old_status) = old_status {
+                                    old_status == status
+                                } else {
+                                    true
+                                };
+                                if update_others {
+                                    for key in call.get_party_public_keys() {
+                                        if key != self.public_key() {
+                                            self.net.send(HoshiMessage::new(
+                                                self.public_key(),
+                                                key.to_string(),
+                                                HoshiPayload::UpdateCallStatus {
+                                                    call_id: call_id.to_string(),
+                                                    party_id: (&party_id).to_string(),
+                                                    status: status,
+                                                },
+                                            ));   
+                                        }
+                                        if &key != &party_id {
+                                            if let Some(party_status) = call.get_status(&key) {
+                                                self.net.send(HoshiMessage::new(
+                                                    self.public_key(),
+                                                    (&party_id).to_string(),
+                                                    HoshiPayload::UpdateCallStatus {
+                                                        call_id: call_id.to_string(),
+                                                        party_id: key.to_string(),
+                                                        status: party_status,
+                                                    },
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             break;
                         }
-                    }
-                    if update_others {
-                        let _ = self.call_set_status(
-                            &call_id,
-                            Contact::new(party_id.to_string(), None),
-                            status,
-                        );
                     }
                 }
                 HoshiPayload::AudioChunk { call_id, chunk } => {
