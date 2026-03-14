@@ -371,7 +371,7 @@ pub struct CallParty {
     pub contact: Contact,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CallPartyStatus {
     Ringing,
     HungUp,

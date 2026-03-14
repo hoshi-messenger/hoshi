@@ -201,6 +201,9 @@ impl HoshiClient {
             call.add_party(contact.clone().into());
             call.set_party_status(&public_key, status);
             for key in call.get_party_public_keys() {
+                if key == self.public_key() {
+                    continue;
+                }
                 self.net.send(HoshiMessage::new(
                     self.public_key(),
                     key,
@@ -357,12 +360,27 @@ impl HoshiClient {
                     party_id,
                     status,
                 } => {
+                    let mut update_others = false;
                     for call in self.calls.borrow_mut().iter_mut() {
                         if call.id() == &call_id {
+                            if call
+                                .get_status(&party_id)
+                                .map(|o| o != status)
+                                .unwrap_or(true)
+                            {
+                                update_others = true;
+                            }
                             call.set_party_status(&party_id, status);
                             println!("{:?}", call);
                             break;
                         }
+                    }
+                    if update_others {
+                        let _ = self.call_set_status(
+                            &call_id,
+                            Contact::new(party_id.to_string(), None),
+                            status,
+                        );
                     }
                 }
                 HoshiPayload::AudioChunk { call_id, chunk } => {
@@ -398,7 +416,13 @@ impl HoshiClient {
         self.calls.borrow_mut().retain_mut(|call| {
             msgs += 1;
             call.step(self);
-            call.active_or_ringing_party_count() > 1
+
+            let own_status = call.get_status(&self.public_key());
+            if own_status.is_none() || matches!(own_status, Some(CallPartyStatus::HungUp)) {
+                false
+            } else {
+                call.active_or_ringing_party_count() > 1
+            }
         });
         if self.calls.borrow().len() != before {
             self.calls_changed();
