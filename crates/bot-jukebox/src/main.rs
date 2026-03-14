@@ -46,6 +46,6 @@ fn main() -> Result<()> {
 
     loop {
         client.step();
-        std::thread::sleep(Duration::from_millis(2));
+        std::thread::sleep(Duration::from_millis(4));
     }
 }

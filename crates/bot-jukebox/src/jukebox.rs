@@ -37,7 +37,7 @@ impl Jukebox {
                 .filter(|e| {
                     matches!(
                         e.path().extension().and_then(|x| x.to_str()),
-                        Some("mp3" | "m4a" | "opus" | "flac")
+                        Some("mp3" | "m4a")
                     )
                 })
                 .collect(),

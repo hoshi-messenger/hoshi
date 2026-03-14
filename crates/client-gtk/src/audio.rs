@@ -37,16 +37,18 @@ impl AudioStream for ClientStream {
             return 0;
         }
         let mut buffers = self.sink_buffers.lock().unwrap();
-        let buf = buffers.entry(channel).or_insert_with(VecDeque::new);
+        let buf = buffers.entry(channel).or_insert_with(|| {
+            let mut deque = VecDeque::new();
+            // Super simple static jitter buffer, should make this more sophisticated in the long run
+            deque.extend([0i16; 2048].into_iter());
+            deque
+        });
         buf.extend(samples.iter().copied());
         // If buffer exceeds cap, drop oldest samples to bound playback latency.
         if buf.len() > SINK_BUFFER_CAP {
             println!("Sink buffer exceeded cap!");
             let excess = buf.len() - SINK_BUFFER_CAP;
             buf.drain(..excess);
-        }
-        if buf.len() < 1024 {
-            println!("Buffer dangerously small");
         }
         samples.len()
     }
