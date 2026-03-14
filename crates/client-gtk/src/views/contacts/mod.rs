@@ -88,7 +88,7 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
                     if matches!(call.get_status(&public_key), Some(CallPartyStatus::Active)) {
                         if state
                             .client
-                            .call_set_status(call.id(), contact.clone(), CallPartyStatus::Ringing)
+                            .call_invite_party(call.id(), contact.clone())
                             .is_ok()
                         {
                             return;

@@ -1,6 +1,7 @@
-use std::{cell::RefCell, f32::consts::PI, ops::Rem, rc::Rc, time::Instant};
+use std::{cell::RefCell, collections::HashSet, f32::consts::PI, ops::Rem, rc::Rc, time::Instant};
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{
     AudioStream, Contact,
@@ -13,6 +14,7 @@ use crate::{
 pub struct Call {
     id: String,
     parties: Vec<CallParty>,
+    events: Vec<CallPartyEvent>,
 
     pub(crate) audio: Rc<RefCell<Option<Box<dyn AudioStream>>>>,
 
@@ -21,7 +23,6 @@ pub struct Call {
     last_invite: Option<Instant>,
     pub call_started: Instant,
     pub call_ended: Option<Instant>,
-    last_ring: Option<Instant>,
 }
 
 fn dtmf_freqs(digit: char) -> Option<(f32, f32)> {
@@ -50,36 +51,55 @@ fn dtmf_freqs(digit: char) -> Option<(f32, f32)> {
 }
 
 impl Call {
-    pub fn new(parties: Vec<Contact>) -> Self {
-        let parties = parties.into_iter().map(|p| p.into()).collect();
+    pub fn new(own_key: String, parties: Vec<Contact>) -> Self {
+        let mut events = Vec::new();
+        events.push(CallPartyEvent::new(own_key.clone(), CallPartyStatus::Active));
+        for p in &parties {
+            events.push(CallPartyEvent::new(
+                p.public_key.clone(),
+                CallPartyStatus::Ringing,
+            ));
+        }
+
+        let mut call_parties: Vec<CallParty> = parties.into_iter().map(|p| p.into()).collect();
+        call_parties.push(CallParty {
+            contact: Contact::new(own_key, None),
+            status: CallPartyStatus::Active,
+        });
+
         Self {
             id: uuid::Uuid::now_v7().to_string(),
-            parties,
+            parties: call_parties,
+            events,
             audio: Rc::new(RefCell::new(None)),
             ring_samples_written: 0,
             last_invite: None,
             call_started: Instant::now(),
             call_ended: None,
-            last_ring: None,
+
             last_audio_send: None,
         }
     }
 
-    pub fn from_invite(id: String, caller: Contact, own_contact: Contact) -> Self {
-        let mut caller: CallParty = caller.into();
-        caller.status = CallPartyStatus::Active;
-
-        Self {
+    pub fn from_events(
+        id: String,
+        events: Vec<CallPartyEvent>,
+        contact_lookup: impl Fn(&str) -> Contact,
+    ) -> Self {
+        let mut call = Self {
             id,
-            parties: vec![caller, own_contact.into()],
+            parties: vec![],
+            events: vec![],
             audio: Rc::new(RefCell::new(None)),
             last_invite: None,
             call_started: Instant::now(),
             ring_samples_written: 0,
             call_ended: None,
-            last_ring: Some(Instant::now()),
+
             last_audio_send: None,
-        }
+        };
+        call.merge_events(events, &contact_lookup);
+        call
     }
 
     pub fn set_audio(&self, sink: Option<Box<dyn AudioStream>>) {
@@ -89,26 +109,15 @@ impl Call {
     pub fn active_party_count(&self) -> usize {
         self.parties
             .iter()
-            .filter(|p| match p.status {
-                CallPartyStatus::Active => true,
-                _ => false,
-            })
+            .filter(|p| matches!(p.status, CallPartyStatus::Active))
             .count()
     }
 
     pub fn active_or_ringing_party_count(&self) -> usize {
         self.parties
             .iter()
-            .filter(|p| match p.status {
-                CallPartyStatus::Ringing => true,
-                CallPartyStatus::Active => true,
-                _ => false,
-            })
+            .filter(|p| matches!(p.status, CallPartyStatus::Ringing | CallPartyStatus::Active))
             .count()
-    }
-
-    pub fn update_last_ring(&mut self) {
-        self.last_ring = Some(Instant::now());
     }
 
     pub fn id(&self) -> &str {
@@ -122,22 +131,81 @@ impl Call {
             .map(|p| p.status)
     }
 
-    pub fn set_party_status(&mut self, public_key: &str, status: CallPartyStatus) {
-        if let Some(party) = self
-            .parties
-            .iter_mut()
-            .find(|p| p.contact.public_key == public_key)
-        {
-            party.status = status;
+    pub fn events(&self) -> &Vec<CallPartyEvent> {
+        &self.events
+    }
+
+    pub fn add_event(&mut self, event: CallPartyEvent) {
+        self.events.push(event);
+        self.rebuild_parties_simple();
+    }
+
+    pub fn merge_events(
+        &mut self,
+        incoming: Vec<CallPartyEvent>,
+        contact_lookup: &impl Fn(&str) -> Contact,
+    ) {
+        let existing_ids: HashSet<Uuid> = self.events.iter().map(|e| e.id).collect();
+        for event in incoming {
+            if !existing_ids.contains(&event.id) {
+                self.events.push(event);
+            }
+        }
+        self.rebuild_parties(contact_lookup);
+    }
+
+    /// Rebuild parties from events, preserving existing Contact aliases
+    fn rebuild_parties_simple(&mut self) {
+        self.events.sort();
+        let mut status_map: Vec<(&str, CallPartyStatus)> = Vec::new();
+        for event in &self.events {
+            if let Some(entry) = status_map.iter_mut().find(|(k, _)| *k == event.key()) {
+                entry.1 = event.status();
+            } else {
+                status_map.push((event.key(), event.status()));
+            }
+        }
+        for (key, status) in &status_map {
+            if let Some(party) = self.parties.iter_mut().find(|p| p.contact.public_key == *key) {
+                party.status = *status;
+            } else {
+                self.parties.push(CallParty {
+                    contact: Contact::new(key.to_string(), None),
+                    status: *status,
+                });
+            }
         }
     }
 
-    pub fn add_party(&mut self, party: CallParty) -> bool {
-        if self.get_status(&party.contact.public_key).is_some() {
-            return false;
+    /// Rebuild parties from events, using contact_lookup for new parties
+    fn rebuild_parties(&mut self, contact_lookup: &impl Fn(&str) -> Contact) {
+        self.events.sort();
+        let mut status_map: Vec<(&str, CallPartyStatus)> = Vec::new();
+        for event in &self.events {
+            if let Some(entry) = status_map.iter_mut().find(|(k, _)| *k == event.key()) {
+                entry.1 = event.status();
+            } else {
+                status_map.push((event.key(), event.status()));
+            }
         }
-        self.parties.push(party);
-        true
+        for (key, status) in &status_map {
+            if let Some(party) = self.parties.iter_mut().find(|p| p.contact.public_key == *key) {
+                party.status = *status;
+            } else {
+                self.parties.push(CallParty {
+                    contact: contact_lookup(key),
+                    status: *status,
+                });
+            }
+        }
+    }
+
+    pub fn non_hungup_party_keys(&self) -> Vec<String> {
+        self.parties
+            .iter()
+            .filter(|p| !matches!(p.status, CallPartyStatus::HungUp))
+            .map(|p| p.contact.public_key.clone())
+            .collect()
     }
 
     pub fn get_call_label(&self, own_contact: Contact) -> String {
@@ -211,7 +279,7 @@ impl Call {
     }
 
     pub fn step(&mut self, client: &HoshiClient) {
-        // --- Invite sending (ringing parties) ---
+        // --- Periodic re-send of full call state to all non-HungUp parties ---
         let now = Instant::now();
         let should_send = self
             .last_invite
@@ -219,16 +287,19 @@ impl Call {
 
         if should_send {
             self.last_invite = Some(now);
-            for party in &self.parties {
-                if matches!(party.status, CallPartyStatus::Ringing) {
-                    client.net.send(HoshiMessage::new(
-                        client.public_key(),
-                        party.contact.public_key.clone(),
-                        HoshiPayload::InviteToCall {
-                            call_id: self.id.clone(),
-                        },
-                    ));
+            let my_key = client.public_key();
+            for key in self.non_hungup_party_keys() {
+                if key == my_key {
+                    continue;
                 }
+                client.net.send(HoshiMessage::new(
+                    my_key.clone(),
+                    key,
+                    HoshiPayload::UpdateCallState {
+                        call_id: self.id.clone(),
+                        events: self.events.clone(),
+                    },
+                ));
             }
         }
 
@@ -384,5 +455,42 @@ impl From<Contact> for CallParty {
             contact: value,
             status: CallPartyStatus::Ringing,
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CallPartyEvent {
+    id: Uuid,
+    key: String,
+    status: CallPartyStatus,
+}
+
+impl CallPartyEvent {
+    pub fn new(key: String, status: CallPartyStatus) -> Self {
+        Self {
+            id: Uuid::now_v7(),
+            key,
+            status,
+        }
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    pub fn status(&self) -> CallPartyStatus {
+        self.status
+    }
+}
+
+impl PartialOrd for CallPartyEvent {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CallPartyEvent {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id.cmp(&other.id)
     }
 }

@@ -20,7 +20,7 @@ rusqlite = { version = "0.37", features = ["bundled", "time"] }
 tokio-rusqlite = { version = "0.7", features = ["bundled", "time"] }
 argon2 = "0.5"
 rand_core = { version = "0.6", features = ["std"] }
-uuid = { version = "1", features = ["v7"] }
+uuid = { version = "1", features = ["v7", "serde"] }
 jsonwebtoken = "9"
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 x25519-dalek = "2"
