@@ -1,5 +1,8 @@
 use std::{
-    cell::RefCell, io::BufReader, num::{NonZeroU16, NonZeroU32}, path::PathBuf,
+    cell::RefCell,
+    io::BufReader,
+    num::{NonZeroU16, NonZeroU32},
+    path::PathBuf,
 };
 
 use anyhow::{Result, anyhow};
@@ -29,18 +32,24 @@ impl Jukebox {
 
     fn load_next(&self) -> Result<()> {
         let entries: Vec<_> = match std::fs::read_dir(&self.music_library) {
-            Ok(d) => d.filter_map(|e| e.ok())
-                .filter(|e| matches!(e.path().extension().and_then(|x| x.to_str()), Some("mp3" | "m4a" | "opus" | "flac")))
+            Ok(d) => d
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    matches!(
+                        e.path().extension().and_then(|x| x.to_str()),
+                        Some("mp3" | "m4a" | "opus" | "flac")
+                    )
+                })
                 .collect(),
             Err(e) => {
                 return Err(e.into());
             }
         };
-        if entries.is_empty() { 
+        if entries.is_empty() {
             println!("No tracks found");
             return Err(anyhow!("No tracks found"));
         }
-        
+
         let path = entries[(rand::random::<u32>() % entries.len() as u32) as usize].path();
         println!("Queuing: {:?}", &path);
 
@@ -49,10 +58,14 @@ impl Jukebox {
             .and_then(|f| Ok(Decoder::new(BufReader::new(f))?))
         {
             Ok(dec) => {
-                let iter = UniformSourceIterator::new(dec, NonZeroU16::new(1).unwrap(), NonZeroU32::new(48000).unwrap());
+                let iter = UniformSourceIterator::new(
+                    dec,
+                    NonZeroU16::new(1).unwrap(),
+                    NonZeroU32::new(48000).unwrap(),
+                );
                 let iter = SampleTypeConverter::new(iter);
                 *self.source.borrow_mut() = Some(Box::new(iter));
-            },
+            }
             Err(e) => {
                 eprintln!("Error trying to play {:?}: {e}", &path);
                 *self.source.borrow_mut() = None;
@@ -64,8 +77,7 @@ impl Jukebox {
 
 impl AudioStream for Jukebox {
     fn write(&self, _channel: usize, samples: &[i16]) -> usize {
-        //samples.len()
-        0
+        samples.len()
     }
 
     fn read(&self, buf: &mut [i16]) -> usize {
@@ -122,9 +134,7 @@ pub struct JukeboxInterface {
 
 impl JukeboxInterface {
     pub fn new(music_library: PathBuf) -> Self {
-        Self {
-            music_library,
-        }
+        Self { music_library }
     }
 }
 

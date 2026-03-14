@@ -2,7 +2,7 @@ use futures::{SinkExt, StreamExt};
 use reqwest::header::USER_AGENT;
 use reqwest_websocket::{Message, RequestBuilderExt};
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, sync::mpsc};
+use std::{cell::RefCell, sync::mpsc, time::Duration};
 
 use crate::{ChatMessage, RelayInfo, audio_chunk::AudioChunk, call::CallPartyStatus};
 
@@ -98,6 +98,7 @@ impl WebSocketPipe {
         {
             let relay = relay.clone();
             std::thread::spawn(move || {
+                let mut connection_attempts = 0;
                 let mut rx = tokio_rx;
                 let tx = cli_tx;
                 let rt = tokio::runtime::Builder::new_current_thread()
@@ -105,79 +106,89 @@ impl WebSocketPipe {
                     .build()
                     .unwrap();
                 rt.block_on(async move {
-                    let ws = match reqwest::Client::default()
-                        .get(&relay.url)
-                        .header("Authorization", format!("Bearer {}", public_key))
-                        .header(USER_AGENT, format!("Hoshi Messenger {}", env!("CARGO_PKG_VERSION")))
-                        .upgrade()
-                        .send()
-                        .await
-                        .and_then(|r| Ok(r))
-                    {
-                        Ok(r) => match r.into_websocket().await {
-                            Ok(ws) => ws,
-                            Err(e) => {
-                                eprintln!("WS upgrade failed for {}: {e}", relay.url);
-                                return;
-                            }
-                        },
-                        Err(e) => {
-                            eprintln!("WS connect failed for {}: {e}", relay.url);
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(connection_attempts * 200)).await;
+                        connection_attempts += 1;
+                        if connection_attempts > 10 {
+                            eprintln!("Connection to {} failed too many times, aborting", &relay.url);
                             return;
                         }
-                    };
-
-                    let (mut sink, mut stream) = ws.split();
-
-                    loop {
-                        tokio::select! {
-                            // relay -> client
-                            msg = stream.next() => {
-                                match msg {
-                                    Some(Ok(Message::Text(text))) => {
-                                        println!("WS Text: {text}");
-                                    }
-                                    Some(Ok(Message::Binary(bytes))) => {
-                                        if let Ok(envelope) = rmp_serde::from_slice::<HoshiEnvelope>(&bytes) {
-                                            if let Ok(msg) = rmp_serde::from_slice::<HoshiMessage>(&envelope.payload) {
-                                                tx.send(msg).ok();
-                                            }
-                                        }
-                                    }
-                                    Some(Err(e)) => {
-                                        eprintln!("WS error: {e:?}");
-                                        break;
-                                    }
-                                    None => {
-                                        eprintln!("WS closed by relay");
-                                        break;
-                                    }
-                                    _ => {}
+                        let ws = match reqwest::Client::default()
+                            .get(&relay.url)
+                            .header("Authorization", format!("Bearer {}", public_key))
+                            .header(USER_AGENT, format!("Hoshi Messenger {}", env!("CARGO_PKG_VERSION")))
+                            .upgrade()
+                            .send()
+                            .await
+                            .and_then(|r| Ok(r))
+                        {
+                            Ok(r) => match r.into_websocket().await {
+                                Ok(ws) => ws,
+                                Err(e) => {
+                                    eprintln!("WS upgrade failed for {}: {e}", relay.url);
+                                    continue;
                                 }
+                            },
+                            Err(e) => {
+                                eprintln!("WS connect failed for {}: {e}", relay.url);
+                                continue;
                             }
-                            // client -> relay
-                            msg = rx.recv() => {
-                                match msg {
-                                    Some(msg) => {
-                                        if let Ok(payload) = rmp_serde::to_vec(&msg) {
-                                            let envelope = HoshiEnvelope {
-                                                recipient: msg.to_key.clone(),
-                                                payload,
-                                            };
-                                            if let Ok(bytes) = rmp_serde::to_vec(&envelope) {
-                                                let _ = sink.send(Message::Binary(bytes.into())).await;
+                        };
+                        println!("Opened WS Connection to {}", &relay.url);
+                        let (mut sink, mut stream) = ws.split();
+
+                        connection_attempts = 0;
+
+                        loop {
+                            tokio::select! {
+                                // relay -> client
+                                msg = stream.next() => {
+                                    match msg {
+                                        Some(Ok(Message::Text(text))) => {
+                                            println!("WS Text: {text}");
+                                        }
+                                        Some(Ok(Message::Binary(bytes))) => {
+                                            if let Ok(envelope) = rmp_serde::from_slice::<HoshiEnvelope>(&bytes) {
+                                                if let Ok(msg) = rmp_serde::from_slice::<HoshiMessage>(&envelope.payload) {
+                                                    tx.send(msg).ok();
+                                                }
                                             }
                                         }
+                                        Some(Err(e)) => {
+                                            eprintln!("WS error: {e:?}");
+                                            break;
+                                        }
+                                        None => {
+                                            eprintln!("WS closed by relay");
+                                            break;
+                                        }
+                                        _ => {}
                                     }
-                                    None => {
-                                        // channel closed, client gone
-                                        break;
+                                }
+                                // client -> relay
+                                msg = rx.recv() => {
+                                    match msg {
+                                        Some(msg) => {
+                                            if let Ok(payload) = rmp_serde::to_vec(&msg) {
+                                                let envelope = HoshiEnvelope {
+                                                    recipient: msg.to_key.clone(),
+                                                    payload,
+                                                };
+                                                if let Ok(bytes) = rmp_serde::to_vec(&envelope) {
+                                                    let _ = sink.send(Message::Binary(bytes.into())).await;
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            // channel closed, client gone
+                                            break;
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                });   
+                });
             });
         }
 
