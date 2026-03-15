@@ -45,4 +45,4 @@ Those are more complicated non-essential tasks, will probably take a while until
 
 ## License
 
-Unless otherwise stated all source code in this repository is under the MPL 2.0 license which is included here.
+Unless otherwise stated all source code in this repository is under the MPL 2.0 license, see /LICENSE
