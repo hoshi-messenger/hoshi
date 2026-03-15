@@ -29,7 +29,7 @@ a couple of them since they shouldn't take too long
 - [ ] Show last message instead of public key, in the chat view show status 
 
 ## Long-term polish
-Those are more complicated non-essential tasks, will probably take a while until we get to them, though AI might help here.
+Those are more complicated non-essential tasks, will probably take a while until we get to them
 
 - [ ] Build custom Emoji chooser, make it look nice on bare X11
 - [ ] Typing indicator
@@ -45,4 +45,4 @@ Those are more complicated non-essential tasks, will probably take a while until
 
 ## License
 
-Unless otherwise stated all source codes in this repository is under the MPL 2.0 license which is included here.
+Unless otherwise stated all source code in this repository is under the MPL 2.0 license which is included here.
