@@ -3,16 +3,26 @@ use std::{
     io::BufReader,
     num::{NonZeroU16, NonZeroU32},
     path::PathBuf,
+    sync::mpsc,
 };
 
 use anyhow::{Result, anyhow};
 use hoshi_clientlib::{AudioInterface, AudioStream, Call, HoshiClient};
 use rodio::{Decoder, conversions::SampleTypeConverter, source::UniformSourceIterator};
 
+pub struct SongNotification {
+    pub filename: String,
+    pub from: String,
+    pub recipients: Vec<String>,
+}
+
 struct Jukebox {
     music_library: PathBuf,
     playing: RefCell<bool>,
     source: RefCell<Option<Box<dyn Iterator<Item = i16> + Send>>>,
+    notify_tx: mpsc::Sender<SongNotification>,
+    from: String,
+    recipients: Vec<String>,
 }
 
 impl std::fmt::Debug for Jukebox {
@@ -22,11 +32,19 @@ impl std::fmt::Debug for Jukebox {
 }
 
 impl Jukebox {
-    pub fn new(music_library: PathBuf) -> Self {
+    pub fn new(
+        music_library: PathBuf,
+        notify_tx: mpsc::Sender<SongNotification>,
+        from: String,
+        recipients: Vec<String>,
+    ) -> Self {
         Self {
             playing: RefCell::new(false),
             music_library,
             source: RefCell::new(None),
+            notify_tx,
+            from,
+            recipients,
         }
     }
 
@@ -53,6 +71,12 @@ impl Jukebox {
         let path = entries[(rand::random::<u32>() % entries.len() as u32) as usize].path();
         println!("Queuing: {:?}", &path);
 
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
+
         match std::fs::File::open(&path)
             .map_err(anyhow::Error::from)
             .and_then(|f| Ok(Decoder::new(BufReader::new(f))?))
@@ -65,6 +89,12 @@ impl Jukebox {
                 );
                 let iter = SampleTypeConverter::new(iter);
                 *self.source.borrow_mut() = Some(Box::new(iter));
+
+                let _ = self.notify_tx.send(SongNotification {
+                    filename,
+                    from: self.from.clone(),
+                    recipients: self.recipients.clone(),
+                });
             }
             Err(e) => {
                 eprintln!("Error trying to play {:?}: {e}", &path);
@@ -130,17 +160,33 @@ impl AudioStream for Jukebox {
 #[derive(Debug)]
 pub struct JukeboxInterface {
     music_library: PathBuf,
+    notify_tx: mpsc::Sender<SongNotification>,
 }
 
 impl JukeboxInterface {
-    pub fn new(music_library: PathBuf) -> Self {
-        Self { music_library }
+    pub fn new(music_library: PathBuf, notify_tx: mpsc::Sender<SongNotification>) -> Self {
+        Self {
+            music_library,
+            notify_tx,
+        }
     }
 }
 
 impl AudioInterface for JukeboxInterface {
-    fn create(&self, _client: &HoshiClient, _call: &Call) -> Result<Box<dyn AudioStream>> {
-        let stream = Jukebox::new(self.music_library.clone());
+    fn create(&self, client: &HoshiClient, call: &Call) -> Result<Box<dyn AudioStream>> {
+        let bot_key = client.public_key();
+        let recipients: Vec<String> = call
+            .non_hungup_party_keys()
+            .into_iter()
+            .filter(|k| k != &bot_key)
+            .collect();
+
+        let stream = Jukebox::new(
+            self.music_library.clone(),
+            self.notify_tx.clone(),
+            bot_key,
+            recipients,
+        );
 
         Ok(Box::new(stream))
     }

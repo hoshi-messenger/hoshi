@@ -1,7 +1,7 @@
-use std::{cell::RefCell, env::home_dir, time::Duration};
+use std::{cell::RefCell, env::home_dir, sync::mpsc, time::Duration};
 
 use anyhow::Result;
-use hoshi_clientlib::{CallPartyStatus, HoshiClient};
+use hoshi_clientlib::{CallPartyStatus, ChatMessage, HoshiClient};
 
 mod jukebox;
 use jukebox::JukeboxInterface;
@@ -14,7 +14,8 @@ fn main() -> Result<()> {
     let music_library = home_dir().unwrap_or("./".into());
     let music_library = music_library.join("Music");
 
-    let interface = JukeboxInterface::new(music_library);
+    let (notify_tx, notify_rx) = mpsc::channel();
+    let interface = JukeboxInterface::new(music_library, notify_tx);
     client.set_audio_interface(Some(Box::new(interface)));
 
     let active_calls = RefCell::new(0);
@@ -51,6 +52,19 @@ fn main() -> Result<()> {
 
     loop {
         client.step();
+        while let Ok(notification) = notify_rx.try_recv() {
+            let content = format!("Now playing: {}", notification.filename);
+            for recipient in &notification.recipients {
+                let msg = ChatMessage::create(
+                    notification.from.clone(),
+                    recipient.clone(),
+                    content.clone(),
+                );
+                if let Err(e) = client.message_upsert(msg) {
+                    eprintln!("Failed to send song notification: {e}");
+                }
+            }
+        }
         std::thread::sleep(Duration::from_millis(4));
     }
 }
