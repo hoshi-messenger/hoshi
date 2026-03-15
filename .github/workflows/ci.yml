@@ -59,11 +59,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Checkout flatpak-builder-tools
+        uses: actions/checkout@v5
+        with:
+          repository: flatpak/flatpak-builder-tools
+          path: flatpak-builder-tools
+
       - name: Generate cargo-sources.json
         run: |
+          python3 -m ensurepip
           python3 -m pip install aiohttp toml
-          curl -L -o /tmp/flatpak-cargo-generator.py https://raw.githubusercontent.com/nickel-0/flatpak-cargo-generator/refs/heads/master/flatpak_cargo_generator.py
-          python3 /tmp/flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+          python3 flatpak-builder-tools/cargo/flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
 
       - name: Build Flatpak
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
