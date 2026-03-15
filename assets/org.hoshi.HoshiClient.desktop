@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=Hoshi
-Comment=Encrypted messenger
-Exec=hoshi-client-gtk
-Icon=org.hoshi.HoshiClient
-Type=Application
-Categories=Network;InstantMessaging;
