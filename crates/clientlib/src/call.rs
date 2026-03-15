@@ -19,7 +19,8 @@ pub struct Call {
     pub(crate) audio: Rc<RefCell<Option<Box<dyn AudioStream>>>>,
 
     ring_samples_written: usize,
-    last_audio_send: Option<Instant>,
+    audio_send_start: Option<Instant>,
+    audio_samples_sent: usize,
     last_invite: Option<Instant>,
     pub call_started: Instant,
     pub call_ended: Option<Instant>,
@@ -76,11 +77,11 @@ impl Call {
             events,
             audio: Rc::new(RefCell::new(None)),
             ring_samples_written: 0,
+            audio_send_start: None,
+            audio_samples_sent: 0,
             last_invite: None,
             call_started: Instant::now(),
             call_ended: None,
-
-            last_audio_send: None,
         }
     }
 
@@ -94,12 +95,12 @@ impl Call {
             parties: vec![],
             events: vec![],
             audio: Rc::new(RefCell::new(None)),
+            audio_send_start: None,
+            audio_samples_sent: 0,
             last_invite: None,
             call_started: Instant::now(),
             ring_samples_written: 0,
             call_ended: None,
-
-            last_audio_send: None,
         };
         call.merge_events(events, &contact_lookup);
         call
@@ -345,14 +346,7 @@ impl Call {
             self.audio.borrow().as_ref().map(|s| s.pause());
         }
 
-        // --- Capture and send audio every 20ms ---
-        let should_send_audio = self
-            .last_audio_send
-            .map_or(true, |t| t.elapsed().as_millis() >= 20);
-        if !should_send_audio {
-            return;
-        }
-
+        // --- Capture and send audio: drain all available source data ---
         let my_key = client.public_key();
         let my_status = self.get_status(&my_key);
         match my_status {
@@ -445,33 +439,51 @@ impl Call {
             return;
         }
 
-        let mut samples_48k = [0i16; 1024];
-        if let Some(source) = self.audio.borrow().as_ref() {
-            let samples_read = source.read(&mut samples_48k);
-            // If we don't have enough data buffered we'll just return and send data the next time
-            if samples_read == 0 {
-                return;
+        // Drain available audio from the source buffer in 1024-sample chunks,
+        // capped by a budget based on wall-clock time to avoid flooding the network.
+        let send_start = *self.audio_send_start.get_or_insert_with(Instant::now);
+        let elapsed_samples = (send_start.elapsed().as_secs_f64() * 48000.0) as usize;
+        // Allow sending up to 64k samples ahead of real-time to absorb stalls.
+        let max_samples = elapsed_samples + 8192;
+
+        loop {
+            if self.audio_samples_sent >= max_samples {
+                break;
             }
-        }
 
-        // Encode as μ-law
-        let encoded: Vec<u8> = samples_48k.iter().map(|&s| linear_to_ulaw(s)).collect();
+            let mut samples_48k = [0i16; 1024];
+            let samples_read = if let Some(source) = self.audio.borrow().as_ref() {
+                let n = source.read(&mut samples_48k);
+                if n == 0 {
+                    break;
+                }
+                n
+            } else {
+                break;
+            };
 
-        let chunk = AudioChunk::ULaw {
-            sample_rate: 48_000,
-            samples: encoded,
-        };
-        self.last_audio_send = Some(Instant::now());
+            self.audio_samples_sent += samples_read;
 
-        for key in &active_keys {
-            client.net.send(HoshiMessage::new(
-                my_key.clone(),
-                key.clone(),
-                HoshiPayload::AudioChunk {
-                    call_id: self.id.clone(),
-                    chunk: chunk.clone(),
-                },
-            ));
+            // Encode as μ-law
+            let encoded: Vec<u8> = samples_48k[..samples_read]
+                .iter()
+                .map(|&s| linear_to_ulaw(s))
+                .collect();
+
+            let chunk = AudioChunk::ULaw {
+                sample_rate: 48_000,
+                samples: encoded,
+            };
+            for key in &active_keys {
+                client.net.send(HoshiMessage::new(
+                    my_key.clone(),
+                    key.clone(),
+                    HoshiPayload::AudioChunk {
+                        call_id: self.id.clone(),
+                        chunk: chunk.clone(),
+                    },
+                ));
+            }
         }
     }
 }

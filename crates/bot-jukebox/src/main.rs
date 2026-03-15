@@ -1,4 +1,4 @@
-use std::{env::home_dir, time::Duration};
+use std::{cell::RefCell, env::home_dir, time::Duration};
 
 use anyhow::Result;
 use hoshi_clientlib::{CallPartyStatus, HoshiClient};
@@ -17,6 +17,7 @@ fn main() -> Result<()> {
     let interface = JukeboxInterface::new(music_library);
     client.set_audio_interface(Some(Box::new(interface)));
 
+    let active_calls = RefCell::new(0);
     client.calls_watch(move |client, calls| {
         let public_key = client.public_key();
         for call in calls.iter() {
@@ -36,7 +37,11 @@ fn main() -> Result<()> {
                 }
             }
         }
-        println!("Calls in-progress: {}", calls.len());
+        let mut active_calls = active_calls.borrow_mut();
+        if *active_calls != calls.len() {
+            println!("Active calls: {}", calls.len());
+            *active_calls = calls.len();
+        }
     });
 
     println!(

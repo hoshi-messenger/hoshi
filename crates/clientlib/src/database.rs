@@ -186,7 +186,6 @@ impl Database {
                         }
                     }
                 }
-                ()
             });
 
         Ok(Self {
