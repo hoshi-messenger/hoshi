@@ -4,12 +4,11 @@ Monorepo of the Hoshi network/messenger. Still in early development so it's not 
 
 ## ToDo / Next Steps
 
-- [ ] Make the clientlib reconnection logic more robust
 - [ ] Use snow for actual crypto
+- [ ] Work on the merkle-tree based sync with gossip support
 
 ## Backlog
 
-- [ ] Work on the merkle-tree based sync with gossip support
 - [ ] Add some clientlib unit tests
 - [ ] Add some relay unit tests
 - [ ] Add integration tests between clientlib <-> relay
@@ -41,3 +40,9 @@ Those are more complicated non-essential tasks, will probably take a while until
 - [X] Notify and sync instead of sending messages directly, on startup notify all contacts
 - [X] Audio calls, start with a Ring message, the other party may then send back an Accept/Reject message directly, once the call is open just spam the other side with regular G711 u-Law sample data and output it with rodio or something like that
 - [X] Abstract audio interface, shouldn't have Rodio in clientlib
+- [X] Make the clientlib reconnection logic more robust
+- [X] Simple bots (Echo / Jukebox)
+
+## License
+
+Unless otherwise stated all source codes in this repository is under the MPL 2.0 license which is included here.
