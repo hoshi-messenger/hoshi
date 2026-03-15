@@ -4,7 +4,7 @@ use clap::Parser;
 use glib::ExitCode;
 use hoshi_client_gtk::{AppState, Args};
 
-const APP_ID: &str = "org.hoshi.hoshi-client-gtk";
+const APP_ID: &str = "org.hoshi.HoshiClient";
 
 fn main() -> ExitCode {
     let args = Args::parse();

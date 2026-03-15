@@ -47,3 +47,26 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --all-targets --locked --exclude hoshi-client-gtk
+
+  flatpak:
+    name: Flatpak
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:gnome-47
+      options: --privileged
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Generate cargo-sources.json
+        run: |
+          pip3 install aiohttp toml
+          curl -L -o /tmp/flatpak-cargo-generator.py https://raw.githubusercontent.com/nickel-0/flatpak-cargo-generator/refs/heads/master/flatpak_cargo_generator.py
+          python3 /tmp/flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+
+      - name: Build Flatpak
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: assets/org.hoshi.HoshiClient.yml
+          bundle: hoshi-client.flatpak
