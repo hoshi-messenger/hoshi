@@ -29,6 +29,7 @@ struct ClientStream {
     cmd_tx: Mutex<mpsc::Sender<AudioCommand>>,
     _thread: Option<thread::JoinHandle<()>>,
     playing: Arc<AtomicBool>,
+    error: Arc<AtomicBool>,
     source_buffer: Arc<Mutex<VecDeque<i16>>>,
     sink_buffers: Arc<Mutex<HashMap<usize, VecDeque<i16>>>>,
 }
@@ -63,7 +64,6 @@ impl AudioStream for ClientStream {
         buf.extend(samples.iter().copied());
         // If buffer exceeds cap, drop oldest samples to bound playback latency.
         if buf.len() > SINK_BUFFER_CAP {
-            println!("Sink buffer exceeded cap!");
             let excess = buf.len() - SINK_BUFFER_CAP;
             buf.drain(..excess);
         }
@@ -72,10 +72,7 @@ impl AudioStream for ClientStream {
 
     fn read(&self, buf: &mut [i16]) -> usize {
         if !self.playing.load(Ordering::Relaxed) {
-            for s in buf.iter_mut() {
-                *s = 0;
-            }
-            return buf.len();
+            return 0;
         }
         let mut buffer = self.source_buffer.lock().unwrap();
         let available = buffer.len().min(buf.len());
@@ -99,6 +96,10 @@ impl AudioStream for ClientStream {
             let _ = self.cmd_tx.lock().unwrap().send(AudioCommand::Pause);
         }
     }
+
+    fn has_error(&self) -> bool {
+        self.error.load(Ordering::Relaxed)
+    }
 }
 
 fn fill_output<T: Sample + FromSample<i16>>(
@@ -106,19 +107,12 @@ fn fill_output<T: Sample + FromSample<i16>>(
     buffers: &Mutex<HashMap<usize, VecDeque<i16>>>,
 ) {
     let mut buffers = buffers.lock().unwrap();
-    let any_active = buffers.values().any(|d| !d.is_empty());
     for out in data.iter_mut() {
         let mixed: i32 = buffers
             .values_mut()
             .map(|deque| deque.pop_front().unwrap_or(0i16) as i32)
             .sum();
         *out = T::from_sample(mixed.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
-    }
-    if any_active && buffers.values().all(|d| d.is_empty()) {
-        eprintln!(
-            "[audio] sink buffer underrun: cpal output drained all {} channels",
-            buffers.len()
-        );
     }
 }
 
@@ -127,21 +121,18 @@ where
     i16: FromSample<T>,
 {
     let mut buf = buffer.lock().unwrap();
-    let was_over = buf.len() > SOURCE_BUFFER_CAP;
     for &s in data {
         buf.push_back(i16::from_sample(s));
         if buf.len() > SOURCE_BUFFER_CAP {
             buf.pop_front();
         }
     }
-    if !was_over && buf.len() >= SOURCE_BUFFER_CAP {
-        eprintln!("[audio] source buffer overflow: cpal input not being read fast enough");
-    }
 }
 
 fn build_sink_stream(
     host: &cpal::Host,
     sink_buffers: &Arc<Mutex<HashMap<usize, VecDeque<i16>>>>,
+    error: &Arc<AtomicBool>,
 ) -> Result<Stream> {
     let device = host
         .default_output_device()
@@ -160,8 +151,6 @@ fn build_sink_stream(
         .ok_or(anyhow!("Output device does not support mono 48kHz"))?
         .with_sample_rate(cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE));
 
-    println!("{:?}", supported);
-
     let sample_format = supported.sample_format();
     let config = cpal::StreamConfig {
         channels: 1,
@@ -169,7 +158,11 @@ fn build_sink_stream(
         buffer_size: cpal::BufferSize::Fixed(4096),
     };
 
-    let err_fn = |err| eprintln!("Output stream error: {err}");
+    let err_flag = Arc::clone(error);
+    let err_fn = move |err| {
+        eprintln!("Output stream error: {err}");
+        err_flag.store(true, Ordering::Relaxed);
+    };
 
     let b = Arc::clone(sink_buffers);
     let stream = match sample_format {
@@ -200,6 +193,7 @@ fn build_sink_stream(
 fn build_source_stream(
     host: &cpal::Host,
     source_buffer: &Arc<Mutex<VecDeque<i16>>>,
+    error: &Arc<AtomicBool>,
 ) -> Result<Stream> {
     let device = host
         .default_input_device()
@@ -225,7 +219,11 @@ fn build_source_stream(
         buffer_size: cpal::BufferSize::Fixed(4096),
     };
 
-    let err_fn = |err| eprintln!("Input stream error: {err}");
+    let err_flag = Arc::clone(error);
+    let err_fn = move |err| {
+        eprintln!("Input stream error: {err}");
+        err_flag.store(true, Ordering::Relaxed);
+    };
 
     let b = Arc::clone(source_buffer);
     let stream = match sample_format {
@@ -259,17 +257,19 @@ impl ClientStream {
             Arc::new(Mutex::new(HashMap::new()));
         let source_buffer: Arc<Mutex<VecDeque<i16>>> = Arc::new(Mutex::new(VecDeque::new()));
         let playing = Arc::new(AtomicBool::new(false));
+        let error = Arc::new(AtomicBool::new(false));
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (init_tx, init_rx) = mpsc::channel::<Result<()>>();
 
         let sb = Arc::clone(&sink_buffers);
         let srb = Arc::clone(&source_buffer);
+        let err = Arc::clone(&error);
 
         let handle = thread::Builder::new().name("audio".into()).spawn(move || {
             let host = cpal::default_host();
 
-            let sink_stream = match build_sink_stream(&host, &sb) {
+            let sink_stream = match build_sink_stream(&host, &sb, &err) {
                 Ok(s) => s,
                 Err(e) => {
                     let _ = init_tx.send(Err(e));
@@ -277,7 +277,7 @@ impl ClientStream {
                 }
             };
 
-            let source_stream = match build_source_stream(&host, &srb) {
+            let source_stream = match build_source_stream(&host, &srb, &err) {
                 Ok(s) => s,
                 Err(e) => {
                     let _ = init_tx.send(Err(e));
@@ -310,6 +310,7 @@ impl ClientStream {
             cmd_tx: Mutex::new(cmd_tx),
             _thread: Some(handle),
             playing,
+            error,
             source_buffer,
             sink_buffers,
         })

@@ -20,6 +20,12 @@ pub trait AudioStream: std::fmt::Debug {
     ///
     /// Can safely be called when already paused
     fn pause(&self);
+
+    /// Returns true if the underlying audio device has encountered an error.
+    /// The clientlib will drop and recreate the stream when this returns true.
+    fn has_error(&self) -> bool {
+        false
+    }
 }
 
 pub trait AudioInterface: std::fmt::Debug {

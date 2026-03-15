@@ -339,6 +339,19 @@ impl Call {
             }
         }
 
+        // --- Audio: recover from stream errors ---
+        if self.audio.borrow().as_ref().is_some_and(|s| s.has_error()) {
+            eprintln!("[audio] stream error detected, recreating audio stream");
+            self.set_audio(None);
+            self.audio_send_start = None;
+            self.audio_samples_sent = 0;
+            if let Some(interface) = client.audio_interface.borrow().as_ref() {
+                if let Ok(stream) = interface.create(client, self) {
+                    self.set_audio(Some(stream));
+                }
+            }
+        }
+
         // --- Audio: start/stop sink and source based on party status ---
         if self.parties.len() > 1 {
             self.audio.borrow().as_ref().map(|s| s.play());
