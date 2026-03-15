@@ -65,6 +65,6 @@ fn main() -> Result<()> {
                 }
             }
         }
-        std::thread::sleep(Duration::from_millis(4));
+        std::thread::sleep(Duration::from_millis(32));
     }
 }

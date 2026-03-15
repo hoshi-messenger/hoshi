@@ -34,6 +34,7 @@ fn main() -> Result<()> {
         });
     }
 
+    let active_calls = RefCell::new(0);
     client.calls_watch(move |client, calls| {
         let public_key = client.public_key();
         for call in calls.iter() {
@@ -53,7 +54,11 @@ fn main() -> Result<()> {
                 }
             }
         }
-        println!("Calls in-progress: {}", calls.len());
+        let mut active_calls = active_calls.borrow_mut();
+        if *active_calls != calls.len() {
+            println!("Active calls: {}", calls.len());
+            *active_calls = calls.len();
+        }
     });
 
     println!(
@@ -69,6 +74,6 @@ fn main() -> Result<()> {
             };
         }
         client.step();
-        std::thread::sleep(Duration::from_millis(4));
+        std::thread::sleep(Duration::from_millis(32));
     }
 }
