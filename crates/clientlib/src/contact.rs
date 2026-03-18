@@ -16,16 +16,37 @@ fn generate_emoji_alias(public_key: &str) -> String {
     format!("{}{}", first, second)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContactType {
+    Unknown,
+    Contact,
+    Blocked,
+}
+
 #[derive(Debug, Clone)]
 pub struct Contact {
     pub public_key: String,
     pub alias: String,
+    pub contact_type: ContactType,
 }
 
 impl Contact {
     pub fn new(public_key: String, alias: Option<String>) -> Contact {
         let alias = alias.unwrap_or_else(|| generate_emoji_alias(&public_key));
-        Self { public_key, alias }
+        Self {
+            public_key,
+            alias,
+            contact_type: ContactType::Contact,
+        }
+    }
+
+    pub fn new_unknown(public_key: String) -> Contact {
+        let alias = generate_emoji_alias(&public_key);
+        Self {
+            public_key,
+            alias,
+            contact_type: ContactType::Unknown,
+        }
     }
 
     pub fn placeholder_contact() -> Contact {

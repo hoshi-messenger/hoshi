@@ -147,6 +147,10 @@ impl HoshiClient {
                 }
             }
         }
+        // Accept chat messages from unknown senders if we're a valid participant
+        if path.starts_with("/chat/") {
+            return crate::node::peer_key_from_chat_path(&self.public_key(), path).is_some();
+        }
         false
     }
 
@@ -215,16 +219,9 @@ impl HoshiClient {
         self.messages_changed(cp.to_string());
     }
 
-    /// Figure out the peer key for a chat path by looking at contacts
-    fn peer_key_for_chat_path(&self, cp: &str) -> Option<String> {
-        let contacts = self.contacts.borrow();
-        let own_key = self.public_key();
-        for contact in contacts.values() {
-            if chat_path(&own_key, &contact.public_key) == cp {
-                return Some(contact.public_key.clone());
-            }
-        }
-        None
+    /// Derive the peer key for a chat path from the XOR hash
+    pub fn peer_key_for_chat_path(&self, cp: &str) -> Option<String> {
+        crate::node::peer_key_from_chat_path(&self.public_key(), cp)
     }
 
     pub fn call_start(&self, parties: Vec<Contact>) {
@@ -522,6 +519,11 @@ impl HoshiClient {
                             if parts.len() >= 3 {
                                 let cp = format!("/{}/{}", parts[1], parts[2]);
                                 if let Some(peer_key) = self.peer_key_for_chat_path(&cp) {
+                                    // Auto-create unknown contact if peer isn't known
+                                    if self.contact_get(&peer_key).is_none() {
+                                        let contact = Contact::new_unknown(peer_key.clone());
+                                        let _ = self.contact_upsert(contact);
+                                    }
                                     self.rebuild_chat_messages(&cp, &peer_key);
                                 }
                             }

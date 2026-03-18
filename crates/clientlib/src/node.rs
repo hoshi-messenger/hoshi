@@ -25,6 +25,7 @@ pub enum HoshiNodePayload {
     ContactPublicKey(String),
     ContactAlias(String),
     ContactDeleted,
+    ContactType(String),
 }
 
 pub struct NodeStore {
@@ -218,6 +219,7 @@ impl NodeStore {
 
             let mut public_key: Option<String> = None;
             let mut alias: Option<String> = None;
+            let mut contact_type: Option<String> = None;
             let mut deleted = false;
 
             for (_, payload) in &children {
@@ -225,6 +227,7 @@ impl NodeStore {
                     HoshiNodePayload::ContactPublicKey(pk) => public_key = Some(pk.clone()),
                     HoshiNodePayload::ContactAlias(a) => alias = Some(a.clone()),
                     HoshiNodePayload::ContactDeleted => deleted = true,
+                    HoshiNodePayload::ContactType(t) => contact_type = Some(t.clone()),
                     _ => {}
                 }
             }
@@ -233,7 +236,13 @@ impl NodeStore {
                 continue;
             }
             if let Some(pk) = public_key {
-                contacts.push(crate::Contact::new(pk, alias));
+                let mut contact = crate::Contact::new(pk, alias);
+                match contact_type.as_deref() {
+                    Some("unknown") => contact.contact_type = crate::ContactType::Unknown,
+                    Some("blocked") => contact.contact_type = crate::ContactType::Blocked,
+                    _ => {}
+                }
+                contacts.push(contact);
             }
         }
         contacts
@@ -243,6 +252,13 @@ impl NodeStore {
         let contact_path = format!("/contact/{}", contact.public_key);
         let pk_uuid = uuid::Uuid::now_v7().to_string();
         let alias_uuid = uuid::Uuid::now_v7().to_string();
+        let type_uuid = uuid::Uuid::now_v7().to_string();
+
+        let type_str = match contact.contact_type {
+            crate::ContactType::Unknown => "unknown",
+            crate::ContactType::Contact => "contact",
+            crate::ContactType::Blocked => "blocked",
+        };
 
         self.insert(HoshiNode {
             from: String::new(),
@@ -258,6 +274,11 @@ impl NodeStore {
             from: String::new(),
             path: format!("{contact_path}/{alias_uuid}"),
             payload: HoshiNodePayload::ContactAlias(contact.alias.clone()),
+        });
+        self.insert(HoshiNode {
+            from: String::new(),
+            path: format!("{contact_path}/{type_uuid}"),
+            payload: HoshiNodePayload::ContactType(type_str.to_string()),
         });
     }
 
@@ -425,4 +446,21 @@ pub fn chat_path(a: &str, b: &str) -> String {
         .map(|(x, y)| x ^ y)
         .collect();
     format!("/chat/{}", hex_encode(&xor))
+}
+
+/// Derive the peer's public key from a `/chat/{xor_hex}` path and our own key.
+pub fn peer_key_from_chat_path(own_key: &str, path: &str) -> Option<String> {
+    let xor_hex = path.strip_prefix("/chat/")?;
+    let xor_hex = xor_hex.split('/').next()?;
+    let xor_bytes = hex_decode(xor_hex)?;
+    let own_bytes = hex_decode(own_key)?;
+    if xor_bytes.len() != own_bytes.len() {
+        return None;
+    }
+    let peer: Vec<u8> = xor_bytes
+        .iter()
+        .zip(own_bytes.iter())
+        .map(|(a, b)| a ^ b)
+        .collect();
+    Some(peer.iter().map(|b| format!("{:02x}", b)).collect())
 }

@@ -4,7 +4,11 @@ use hoshi_clientlib::Contact;
 
 use crate::AppState;
 
-pub(super) fn show_add_contact_dialog(parent: &ApplicationWindow, state: AppState) {
+pub(super) fn show_add_contact_dialog(
+    parent: &ApplicationWindow,
+    state: AppState,
+    prefill_key: Option<&str>,
+) {
     let dialog = adw::AlertDialog::builder().heading("New Contact").build();
 
     let vbox = Box::builder()
@@ -13,10 +17,16 @@ pub(super) fn show_add_contact_dialog(parent: &ApplicationWindow, state: AppStat
         .margin_top(8)
         .build();
 
-    let public_key_entry = Entry::builder().placeholder_text("Public Key").build();
-    public_key_entry.connect_map(|public_key_entry: &Entry| {
-        public_key_entry.grab_focus();
-    });
+    let mut pk_builder = Entry::builder().placeholder_text("Public Key");
+    if let Some(key) = prefill_key {
+        pk_builder = pk_builder.text(key).editable(false).sensitive(false);
+    }
+    let public_key_entry = pk_builder.build();
+    if prefill_key.is_none() {
+        public_key_entry.connect_map(|public_key_entry: &Entry| {
+            public_key_entry.grab_focus();
+        });
+    }
 
     let alias_entry = Entry::builder()
         .placeholder_text("Alias (optional)")

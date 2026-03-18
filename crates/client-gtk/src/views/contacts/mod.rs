@@ -3,7 +3,7 @@ mod modals;
 
 use adw::{Avatar, NavigationPage, NavigationSplitView, prelude::*};
 use gtk::{Box, Button, Image, Label, ListBox, ListBoxRow, ScrolledWindow};
-use hoshi_clientlib::{CallPartyStatus, Contact};
+use hoshi_clientlib::{CallPartyStatus, Contact, ContactType};
 
 use crate::AppState;
 
@@ -103,27 +103,40 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
         }
         hbox.append(&call_button);
 
-        let edit_button = create_icon_button("document-edit-symbolic", "Edit");
-        edit_button.add_css_class("flat");
-        {
-            let state = state.clone();
-            let contact = contact.clone();
-            edit_button.connect_clicked(move |_| {
-                show_edit_contact_dialog(&state.win, state.clone(), &contact);
-            });
-        }
-        hbox.append(&edit_button);
+        if contact.contact_type == ContactType::Contact {
+            let edit_button = create_icon_button("document-edit-symbolic", "Edit");
+            edit_button.add_css_class("flat");
+            {
+                let state = state.clone();
+                let contact = contact.clone();
+                edit_button.connect_clicked(move |_| {
+                    show_edit_contact_dialog(&state.win, state.clone(), &contact);
+                });
+            }
+            hbox.append(&edit_button);
 
-        let delete_button = create_icon_button("user-trash-symbolic", "Delete");
-        delete_button.add_css_class("flat");
-        {
-            let state = state.clone();
-            let public_key = contact.public_key.clone();
-            delete_button.connect_clicked(move |_| {
-                show_delete_contact_dialog(&state.win, state.clone(), &public_key);
-            });
+            let delete_button = create_icon_button("user-trash-symbolic", "Delete");
+            delete_button.add_css_class("flat");
+            {
+                let state = state.clone();
+                let public_key = contact.public_key.clone();
+                delete_button.connect_clicked(move |_| {
+                    show_delete_contact_dialog(&state.win, state.clone(), &public_key);
+                });
+            }
+            hbox.append(&delete_button);
+        } else {
+            let add_button = create_icon_button("contact-new-symbolic", "Add Contact");
+            add_button.add_css_class("flat");
+            {
+                let state = state.clone();
+                let public_key = contact.public_key.clone();
+                add_button.connect_clicked(move |_| {
+                    show_add_contact_dialog(&state.win, state.clone(), Some(&public_key));
+                });
+            }
+            hbox.append(&add_button);
         }
-        hbox.append(&delete_button);
     }
 
     hbox
@@ -165,7 +178,8 @@ fn contact_list_buttons(state: AppState) -> Box {
     hbox.append(&add_contact);
     {
         let state = state.clone();
-        add_contact.connect_clicked(move |_| show_add_contact_dialog(&state.win, state.clone()));
+        add_contact
+            .connect_clicked(move |_| show_add_contact_dialog(&state.win, state.clone(), None));
     }
 
     hbox
