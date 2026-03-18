@@ -142,7 +142,7 @@ impl AppState {
         // Get rid of 5px padding
         win.remove_css_class("solid-csd");
 
-        let client = HoshiClient::new(args.db_path).expect("Couldn't create HoshiClient");
+        let client = HoshiClient::new(args.data_dir).expect("Couldn't create HoshiClient");
 
         let state = Self {
             app,

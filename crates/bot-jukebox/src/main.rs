@@ -8,7 +8,7 @@ use jukebox::JukeboxInterface;
 
 fn main() -> Result<()> {
     let path = home_dir().unwrap_or("./".into());
-    let path = path.join(".hoshi").join("bot-jukebox.sqlite3");
+    let path = path.join(".hoshi").join("bot-jukebox");
     let client = HoshiClient::new(Some(path))?;
 
     let music_library = home_dir().unwrap_or("./".into());

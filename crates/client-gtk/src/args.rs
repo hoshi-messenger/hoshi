@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Parser, Clone)]
 pub struct Args {
-    /// Path to the SQLite database file
+    /// Path to the data directory
     #[arg(long)]
-    pub db_path: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
 }

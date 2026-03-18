@@ -16,6 +16,11 @@ pub enum HoshiNodePayload {
     Message,
     ChatDeleted,
     ChatText { content: String },
+    Config { key: String, value: String },
+    Contact,
+    ContactPublicKey(String),
+    ContactAlias(String),
+    ContactDeleted,
 }
 
 pub struct NodeStore {
@@ -131,11 +136,115 @@ impl NodeStore {
         None
     }
 
+    pub fn set_public_key(&mut self, key: String) {
+        self.public_key = key;
+    }
+
+    pub fn config_get(&mut self, key: &str) -> Option<String> {
+        let path = format!("/config/{key}");
+        self.get(&path).and_then(|node| match &node.payload {
+            HoshiNodePayload::Config { value, .. } => Some(value.clone()),
+            _ => None,
+        })
+    }
+
+    pub fn config_set(&mut self, key: &str, value: &str) {
+        let path = format!("/config/{key}");
+        self.insert(HoshiNode {
+            from: String::new(),
+            path,
+            payload: HoshiNodePayload::Config {
+                key: key.to_string(),
+                value: value.to_string(),
+            },
+        });
+    }
+
+    pub fn contacts(&mut self) -> Vec<crate::Contact> {
+        let contact_paths: Vec<String> = self
+            .children("/contact")
+            .iter()
+            .map(|n| n.path.clone())
+            .collect();
+
+        let mut contacts = Vec::new();
+        for cp in contact_paths {
+            let children: Vec<(String, HoshiNodePayload)> = self
+                .children(&cp)
+                .iter()
+                .map(|n| (n.path.clone(), n.payload.clone()))
+                .collect();
+
+            // Sort by path (UUIDs are v7, so lexicographic = chronological)
+            let mut children = children;
+            children.sort_by(|a, b| a.0.cmp(&b.0));
+
+            let mut public_key: Option<String> = None;
+            let mut alias: Option<String> = None;
+            let mut deleted = false;
+
+            for (_, payload) in &children {
+                match payload {
+                    HoshiNodePayload::ContactPublicKey(pk) => public_key = Some(pk.clone()),
+                    HoshiNodePayload::ContactAlias(a) => alias = Some(a.clone()),
+                    HoshiNodePayload::ContactDeleted => deleted = true,
+                    _ => {}
+                }
+            }
+
+            if deleted {
+                continue;
+            }
+            if let Some(pk) = public_key {
+                contacts.push(crate::Contact::new(pk, alias));
+            }
+        }
+        contacts
+    }
+
+    pub fn contact_upsert(&mut self, contact: &crate::Contact) {
+        let contact_path = format!("/contact/{}", contact.public_key);
+        let pk_uuid = uuid::Uuid::now_v7().to_string();
+        let alias_uuid = uuid::Uuid::now_v7().to_string();
+
+        self.insert(HoshiNode {
+            from: String::new(),
+            path: contact_path.clone(),
+            payload: HoshiNodePayload::Contact,
+        });
+        self.insert(HoshiNode {
+            from: String::new(),
+            path: format!("{contact_path}/{pk_uuid}"),
+            payload: HoshiNodePayload::ContactPublicKey(contact.public_key.clone()),
+        });
+        self.insert(HoshiNode {
+            from: String::new(),
+            path: format!("{contact_path}/{alias_uuid}"),
+            payload: HoshiNodePayload::ContactAlias(contact.alias.clone()),
+        });
+    }
+
+    pub fn contact_delete(&mut self, public_key: &str) {
+        let contact_path = format!("/contact/{public_key}");
+        let del_uuid = uuid::Uuid::now_v7().to_string();
+        self.insert(HoshiNode {
+            from: String::new(),
+            path: format!("{contact_path}/{del_uuid}"),
+            payload: HoshiNodePayload::ContactDeleted,
+        });
+    }
+
     pub fn may_read(&self, peer_key: &str, path: &str) -> bool {
+        if path.starts_with("/config/") || path.starts_with("/contact/") {
+            return false;
+        }
         self.is_chat_participant(peer_key, path)
     }
 
     pub fn may_write(&self, peer_key: &str, path: &str, _node: &HoshiNode) -> bool {
+        if path.starts_with("/config/") || path.starts_with("/contact/") {
+            return false;
+        }
         self.is_chat_participant(peer_key, path)
     }
 

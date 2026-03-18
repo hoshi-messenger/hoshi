@@ -9,17 +9,15 @@ use rand_core::{OsRng, RngCore};
 use anyhow::{Result, anyhow};
 
 use crate::{
-    AudioInterface, Call, ChatMessage, Contact, Database, HoshiNetClient, HoshiNode,
-    HoshiNodePayload, NodeStore,
+    AudioInterface, Call, ChatMessage, Contact, HoshiNetClient, HoshiNode, HoshiNodePayload,
+    NodeStore,
     call::{CallPartyEvent, CallPartyStatus},
     chat_path,
-    database::DBReply,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
 };
 
 pub struct HoshiClient {
     pub(crate) net: HoshiNetClient,
-    db: Database,
     public_key: RefCell<String>,
 
     pub(crate) audio_interface: RefCell<Option<Box<dyn AudioInterface>>>,
@@ -43,32 +41,31 @@ pub struct HoshiClient {
 }
 
 impl HoshiClient {
-    pub fn new(db_path: Option<PathBuf>) -> Result<Self> {
+    pub fn new(data_dir: Option<PathBuf>) -> Result<Self> {
         let net = HoshiNetClient::new();
-        let path = db_path.unwrap_or_else(|| {
-            let p = dirs::home_dir().unwrap().join(".hoshi");
-            p.join("client.sqlite3")
-        });
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let node_store_path = path.with_file_name("nodes");
-        let db = Database::new(path)?;
+        let data_dir = data_dir.unwrap_or_else(|| dirs::home_dir().unwrap().join(".hoshi"));
+        std::fs::create_dir_all(&data_dir)?;
+        let node_store_path = data_dir.join("nodes");
 
-        let public_key = match db.config_get_blocking("public_key") {
-            Some(bytes) => String::from_utf8(bytes).expect("public_key config is not valid UTF-8"),
+        let mut nodes = NodeStore::new(Some(node_store_path), String::new());
+        let public_key = match nodes.config_get("public_key") {
+            Some(key) => key,
             None => {
                 let mut bytes = [0u8; 32];
                 OsRng.fill_bytes(&mut bytes);
                 let key: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-                db.config_set("public_key", key.as_bytes().to_vec())?;
+                nodes.config_set("public_key", &key);
                 key
             }
         };
+        nodes.set_public_key(public_key.clone());
 
-        db.contacts_get()?;
-
-        let contacts = RefCell::new(HashMap::new());
+        let loaded_contacts = nodes.contacts();
+        let mut contacts = HashMap::new();
+        for c in loaded_contacts {
+            contacts.insert(c.public_key.clone(), c);
+        }
+        let contacts = RefCell::new(contacts);
         let contacts_watchers = RefCell::new(vec![]);
         let messages = RefCell::new(HashMap::new());
         let messages_watchers = RefCell::new(vec![]);
@@ -89,7 +86,6 @@ impl HoshiClient {
 
         Ok(Self {
             net,
-            db,
             public_key: RefCell::new(public_key.clone()),
 
             audio_interface: RefCell::new(None),
@@ -103,7 +99,7 @@ impl HoshiClient {
             messages,
             messages_watchers,
 
-            nodes: RefCell::new(NodeStore::new(Some(node_store_path), public_key)),
+            nodes: RefCell::new(nodes),
             node_interests: RefCell::new(HashSet::new()),
         })
     }
@@ -373,7 +369,7 @@ impl HoshiClient {
     pub fn set_public_key(&self, key: String) -> Result<()> {
         self.net.set_public_key(key.clone());
         self.net.disconnect_all();
-        self.db.config_set("public_key", key.as_bytes().to_vec())?;
+        self.nodes.borrow_mut().config_set("public_key", &key);
         *self.public_key.borrow_mut() = key;
         Ok(())
     }
@@ -395,33 +391,6 @@ impl HoshiClient {
                 if let Some(messages) = messages {
                     watcher(self, &chat_id, messages);
                 }
-            }
-        }
-    }
-
-    fn handle_db_msg(&self, msg: DBReply) {
-        match msg {
-            DBReply::Shutdown => {
-                panic!("Client/DB: Shutdown - we should never receive this!");
-            }
-            DBReply::Config(_) => {
-                // Config replies are consumed synchronously at startup via config_get_blocking;
-                // receiving one here would be a bug.
-                panic!("Client/DB: unexpected Config reply in step()");
-            }
-            DBReply::Contacts(new_contacts) => {
-                {
-                    self.contacts.borrow_mut().clear();
-
-                    for c in new_contacts {
-                        self.advertise_chat(&c.public_key);
-                        let cp = chat_path(&self.public_key(), &c.public_key);
-                        self.rebuild_chat_messages(&cp, &c.public_key);
-                        let public_key = c.public_key.clone();
-                        self.contacts.borrow_mut().insert(public_key, c);
-                    }
-                }
-                self.contacts_changed();
             }
         }
     }
@@ -607,18 +576,6 @@ impl HoshiClient {
 
         let mut msgs = 0;
 
-        // Only handle at most 32 msgs per iteration, make sure the
-        // calling event loop doesn't block for too long, exact value
-        // will have to be fine-tuned once we have an actual workload
-        for _i in 1..32 {
-            if let Some(msg) = self.db.recv() {
-                msgs += 1;
-                self.handle_db_msg(msg);
-            } else {
-                break;
-            }
-        }
-
         let before = self.calls.borrow().len();
         self.calls.borrow_mut().retain_mut(|call| {
             msgs += 1;
@@ -736,7 +693,7 @@ impl HoshiClient {
             contacts.insert(contact.public_key.clone(), contact);
         }
         self.advertise_chat(&contact.public_key);
-        self.db.contact_upsert(contact)?;
+        self.nodes.borrow_mut().contact_upsert(&contact);
         self.contacts_changed();
 
         Ok(())
@@ -750,7 +707,7 @@ impl HoshiClient {
             let mut contacts = self.contacts.borrow_mut();
             contacts.remove(public_key);
         }
-        self.db.contact_delete(public_key.to_string())?;
+        self.nodes.borrow_mut().contact_delete(public_key);
         self.contacts_changed();
 
         Ok(())
@@ -760,7 +717,6 @@ impl HoshiClient {
 impl std::fmt::Debug for HoshiClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HoshiClient")
-            .field("db", &self.db)
             .field("contacts", &self.contacts)
             .field(
                 "contacts_watchers",

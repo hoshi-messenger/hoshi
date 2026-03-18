@@ -9,7 +9,6 @@ tokio = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }
 reqwest-websocket = { workspace = true }
-rusqlite = { workspace = true }
 dirs = { workspace = true }
 rand_core = { workspace = true }
 uuid = { workspace = true }

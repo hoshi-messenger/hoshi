@@ -8,7 +8,7 @@ use loopback_interface::LoopbackInterface;
 
 fn main() -> Result<()> {
     let path = home_dir().unwrap_or("./".into());
-    let path = path.join(".hoshi").join("bot-echo.sqlite3");
+    let path = path.join(".hoshi").join("bot-echo");
     let client = HoshiClient::new(Some(path))?;
     let msg_queue: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(vec![]));
 
