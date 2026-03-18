@@ -10,8 +10,9 @@ use anyhow::{Result, anyhow};
 
 use crate::{
     AudioInterface, Call, ChatMessage, Contact, Database, HoshiNetClient, HoshiNode,
-    HoshiNodePayload, NodeStore, chat_path,
+    HoshiNodePayload, NodeStore,
     call::{CallPartyEvent, CallPartyStatus},
+    chat_path,
     database::DBReply,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
 };
@@ -126,7 +127,7 @@ impl HoshiClient {
                 return true;
             }
             if let Some(rest) = path.strip_prefix(interest.as_str()) {
-                if rest.starts_with('/') && !rest[1..].contains('/') {
+                if rest.starts_with('/') {
                     return true;
                 }
             }
@@ -136,7 +137,8 @@ impl HoshiClient {
 
     fn node_sync(&self, peer_key: &str, path: &str, have_local_data: bool) {
         if have_local_data {
-            // We have data but hashes differ — drill down to find differences
+            // We have data but hashes differ — drill down to find differences.
+            // Ask the peer for their children so we can learn about their data:
             self.net.send(HoshiMessage::new(
                 self.public_key(),
                 peer_key.to_string(),
@@ -144,6 +146,24 @@ impl HoshiClient {
                     path: path.to_string(),
                 },
             ));
+            // Also advertise our own children so the peer can learn about ours:
+            let mut nodes = self.nodes.borrow_mut();
+            let child_paths: Vec<String> = nodes
+                .children(path)
+                .iter()
+                .map(|n| n.path.clone())
+                .collect();
+            for child_path in child_paths {
+                let h = nodes.hash(&child_path);
+                self.net.send(HoshiMessage::new(
+                    self.public_key(),
+                    peer_key.to_string(),
+                    HoshiPayload::NodeAdvertise {
+                        path: child_path,
+                        hash: h.as_bytes().to_vec(),
+                    },
+                ));
+            }
         } else {
             // We have nothing for this path — request the data directly
             self.net.send(HoshiMessage::new(
@@ -395,6 +415,8 @@ impl HoshiClient {
 
                     for c in new_contacts {
                         self.advertise_chat(&c.public_key);
+                        let cp = chat_path(&self.public_key(), &c.public_key);
+                        self.rebuild_chat_messages(&cp, &c.public_key);
                         let public_key = c.public_key.clone();
                         self.contacts.borrow_mut().insert(public_key, c);
                     }
@@ -414,9 +436,6 @@ impl HoshiClient {
     pub fn step(&self) -> u32 {
         for net_msg in self.net.step() {
             match net_msg.payload {
-                HoshiPayload::ChatMessage(_) | HoshiPayload::RequestChatMessages => {
-                    // Legacy — handled by NodeStore sync now
-                }
                 HoshiPayload::UpdateCallState { call_id, events } => {
                     let mut found = false;
                     let contact_lookup = |key: &str| -> Contact {
@@ -494,8 +513,13 @@ impl HoshiClient {
                         }
                     }
                 }
-                HoshiPayload::NodePut { path, payload, hash } => {
-                    if let Ok(node) = rmp_serde::from_slice::<HoshiNode>(&payload) {
+                HoshiPayload::NodePut {
+                    path,
+                    payload,
+                    hash,
+                } => {
+                    if let Ok(mut node) = rmp_serde::from_slice::<HoshiNode>(&payload) {
+                        node.path = path.clone();
                         let mut nodes = self.nodes.borrow_mut();
                         if nodes.may_write(&net_msg.from_key, &path, &node) {
                             nodes.insert(node);
@@ -543,6 +567,7 @@ impl HoshiClient {
                     if !nodes.may_read(&net_msg.from_key, &path) {
                         continue;
                     }
+                    // Send the node itself if it exists
                     if let Some(node) = nodes.get(&path) {
                         if let Ok(payload) = rmp_serde::to_vec(node) {
                             let h = nodes.hash(&path);
@@ -550,12 +575,30 @@ impl HoshiClient {
                                 self.public_key(),
                                 net_msg.from_key.clone(),
                                 HoshiPayload::NodePut {
-                                    path,
+                                    path: path.clone(),
                                     payload,
                                     hash: h.as_bytes().to_vec(),
                                 },
                             ));
                         }
+                    }
+                    // Always advertise children, even for virtual parent paths
+                    // that have no node themselves (e.g. /chat/{xor})
+                    let child_paths: Vec<String> = nodes
+                        .children(&path)
+                        .iter()
+                        .map(|n| n.path.clone())
+                        .collect();
+                    for child_path in child_paths {
+                        let h = nodes.hash(&child_path);
+                        self.net.send(HoshiMessage::new(
+                            self.public_key(),
+                            net_msg.from_key.clone(),
+                            HoshiPayload::NodeAdvertise {
+                                path: child_path,
+                                hash: h.as_bytes().to_vec(),
+                            },
+                        ));
                     }
                 }
                 _ => {}

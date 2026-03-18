@@ -45,24 +45,13 @@ impl Database {
         // IO calls and depending on the query it might take a couple of ms, so better
         // to run it all on a separate thread, another side benefit is that due to the
         // message format we don't couple the clientlib/client to a DB implementation.
-        let thread =
-            thread::spawn(move || {
-                let rx = cli_rx;
-                let tx = db_tx;
+        let thread = thread::spawn(move || {
+            let rx = cli_rx;
+            let tx = db_tx;
 
-                conn.execute_batch(
-                    "
+            conn.execute_batch(
+                "
                 PRAGMA journal_mode=WAL;
-
-                CREATE TABLE IF NOT EXISTS chat (
-                    id TEXT PRIMARY KEY,
-                    created_at INTEGER NOT NULL,
-                    from_key TEXT NOT NULL,
-                    to_key TEXT NOT NULL,
-                    content TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_chat_from_key ON chat(from_key);
-                CREATE INDEX IF NOT EXISTS idx_chat_to_key ON chat(to_key);
 
                 CREATE TABLE IF NOT EXISTS contact (
                     public_key TEXT PRIMARY KEY,
@@ -76,76 +65,76 @@ impl Database {
                     value BLOB NOT NULL
                 );
             ",
-                )
-                .expect("Couldn't init DB");
+            )
+            .expect("Couldn't init DB");
 
-                loop {
-                    if let Ok(msg) = rx.recv() {
-                        match msg {
-                            DBMessage::Kill => {
-                                tx.send(DBReply::Shutdown)
-                                    .expect("DB couldn't send shutdown msg to client");
-                                break;
-                            }
-                            DBMessage::ContactDelete { public_key } => {
-                                conn.execute(
-                                    "DELETE from contact WHERE public_key = ?1",
-                                    rusqlite::params![&public_key],
-                                )
-                                .expect("Error deleting contact");
-                            }
-                            DBMessage::ContactUpsert(contact) => {
-                                conn.execute(
-                                    "INSERT INTO contact (public_key, alias, created_at, last_seen)
+            loop {
+                if let Ok(msg) = rx.recv() {
+                    match msg {
+                        DBMessage::Kill => {
+                            tx.send(DBReply::Shutdown)
+                                .expect("DB couldn't send shutdown msg to client");
+                            break;
+                        }
+                        DBMessage::ContactDelete { public_key } => {
+                            conn.execute(
+                                "DELETE from contact WHERE public_key = ?1",
+                                rusqlite::params![&public_key],
+                            )
+                            .expect("Error deleting contact");
+                        }
+                        DBMessage::ContactUpsert(contact) => {
+                            conn.execute(
+                                "INSERT INTO contact (public_key, alias, created_at, last_seen)
                                 VALUES (?1, ?2, unixepoch(), unixepoch())
                                 ON CONFLICT(public_key) DO UPDATE SET
                                     alias = excluded.alias,
                                     last_seen = unixepoch()",
-                                    rusqlite::params![contact.public_key, contact.alias],
-                                )
-                                .expect("Error upserting contact");
-                            }
-                            DBMessage::ContactsGet => {
-                                let mut stmt = conn
-                                    .prepare("SELECT public_key, alias FROM contact")
-                                    .expect("Error preparing contacts query");
-                                let contacts = stmt
-                                    .query_map([], |row| {
-                                        Ok(Contact {
-                                            public_key: row.get(0)?,
-                                            alias: row.get(1)?,
-                                        })
+                                rusqlite::params![contact.public_key, contact.alias],
+                            )
+                            .expect("Error upserting contact");
+                        }
+                        DBMessage::ContactsGet => {
+                            let mut stmt = conn
+                                .prepare("SELECT public_key, alias FROM contact")
+                                .expect("Error preparing contacts query");
+                            let contacts = stmt
+                                .query_map([], |row| {
+                                    Ok(Contact {
+                                        public_key: row.get(0)?,
+                                        alias: row.get(1)?,
                                     })
-                                    .expect("Error querying contacts")
-                                    .filter_map(|r| r.ok())
-                                    .collect();
+                                })
+                                .expect("Error querying contacts")
+                                .filter_map(|r| r.ok())
+                                .collect();
 
-                                tx.send(DBReply::Contacts(contacts))
-                                    .expect("DB couldn't send contacts to client");
-                            }
-                            DBMessage::ConfigGet(key) => {
-                                let val: Option<Vec<u8>> = conn
-                                    .query_row(
-                                        "SELECT value FROM config WHERE key = ?1",
-                                        rusqlite::params![key],
-                                        |row| row.get(0),
-                                    )
-                                    .optional()
-                                    .expect("Error querying config");
-                                tx.send(DBReply::Config(val))
-                                    .expect("DB couldn't send config reply");
-                            }
-                            DBMessage::ConfigSet { key, value } => {
-                                conn.execute(
-                                    "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
-                                    rusqlite::params![key, value],
+                            tx.send(DBReply::Contacts(contacts))
+                                .expect("DB couldn't send contacts to client");
+                        }
+                        DBMessage::ConfigGet(key) => {
+                            let val: Option<Vec<u8>> = conn
+                                .query_row(
+                                    "SELECT value FROM config WHERE key = ?1",
+                                    rusqlite::params![key],
+                                    |row| row.get(0),
                                 )
-                                .expect("Error setting config");
-                            }
+                                .optional()
+                                .expect("Error querying config");
+                            tx.send(DBReply::Config(val))
+                                .expect("DB couldn't send config reply");
+                        }
+                        DBMessage::ConfigSet { key, value } => {
+                            conn.execute(
+                                "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
+                                rusqlite::params![key, value],
+                            )
+                            .expect("Error setting config");
                         }
                     }
                 }
-            });
+            }
+        });
 
         Ok(Self {
             tx: cli_tx,

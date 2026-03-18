@@ -4,7 +4,7 @@ use reqwest_websocket::{Message, RequestBuilderExt};
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, sync::mpsc, time::Duration};
 
-use crate::{ChatMessage, RelayInfo, audio_chunk::AudioChunk, call::CallPartyEvent};
+use crate::{RelayInfo, audio_chunk::AudioChunk, call::CallPartyEvent};
 
 pub struct HoshiNetClient {
     relay_list: RefCell<Vec<RelayInfo>>,
@@ -236,8 +236,6 @@ impl HoshiMessage {
 pub enum HoshiPayload {
     Ping,
     Pong,
-    RequestChatMessages,
-    ChatMessage(ChatMessage),
     UpdateCallState {
         call_id: String,
         events: Vec<CallPartyEvent>,

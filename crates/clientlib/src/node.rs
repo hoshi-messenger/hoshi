@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HoshiNode {
     pub from: String,
+    #[serde(skip)]
     pub path: String,
     pub payload: HoshiNodePayload,
 }
@@ -83,9 +84,7 @@ impl NodeStore {
 
         let child_paths: Vec<String> = {
             self.load_children_from_disk(path);
-            self.child_paths_in_memory(path)
-                .map(String::from)
-                .collect()
+            self.child_paths_in_memory(path).map(String::from).collect()
         };
 
         let h = if child_paths.is_empty() {
@@ -214,7 +213,9 @@ impl NodeStore {
     fn read_node_from_disk(&self, path: &str) -> Option<HoshiNode> {
         let dir = self.dir_for_path(path)?;
         let data = std::fs::read(dir.join("__CONTENT__")).ok()?;
-        rmp_serde::from_slice(&data).ok()
+        let mut node: HoshiNode = rmp_serde::from_slice(&data).ok()?;
+        node.path = path.to_string();
+        Some(node)
     }
 
     fn write_hash_to_disk(&self, path: &str, hash: &blake3::Hash) {
@@ -261,7 +262,8 @@ impl NodeStore {
             }
             let content_file = dir.join(name.as_ref()).join("__CONTENT__");
             if let Ok(data) = std::fs::read(&content_file) {
-                if let Ok(node) = rmp_serde::from_slice::<HoshiNode>(&data) {
+                if let Ok(mut node) = rmp_serde::from_slice::<HoshiNode>(&data) {
+                    node.path = child_path.clone();
                     self.nodes.insert(child_path, node);
                 }
             }
@@ -289,6 +291,10 @@ pub fn chat_path(a: &str, b: &str) -> String {
     let a_bytes = hex_decode(a).expect("invalid hex public key");
     let b_bytes = hex_decode(b).expect("invalid hex public key");
     assert_eq!(a_bytes.len(), b_bytes.len(), "public key length mismatch");
-    let xor: Vec<u8> = a_bytes.iter().zip(b_bytes.iter()).map(|(x, y)| x ^ y).collect();
+    let xor: Vec<u8> = a_bytes
+        .iter()
+        .zip(b_bytes.iter())
+        .map(|(x, y)| x ^ y)
+        .collect();
     format!("/chat/{}", hex_encode(&xor))
 }

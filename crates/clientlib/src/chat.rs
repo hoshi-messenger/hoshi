@@ -109,7 +109,13 @@ impl ChatMessage {
 
                     result.insert(
                         msg_id.clone(),
-                        ChatMessage::new(msg_id, created_at, msg_node.from.clone(), to, content.clone()),
+                        ChatMessage::new(
+                            msg_id,
+                            created_at,
+                            msg_node.from.clone(),
+                            to,
+                            content.clone(),
+                        ),
                     );
                 }
                 HoshiNodePayload::ChatDeleted => {
