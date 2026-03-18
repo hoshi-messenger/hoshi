@@ -9,7 +9,8 @@ use rand_core::{OsRng, RngCore};
 use anyhow::{Result, anyhow};
 
 use crate::{
-    AudioInterface, Call, ChatMessage, Contact, Database, HoshiNetClient,
+    AudioInterface, Call, ChatMessage, Contact, Database, HoshiNetClient, HoshiNode,
+    HoshiNodePayload, NodeStore, chat_path,
     call::{CallPartyEvent, CallPartyStatus},
     database::DBReply,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
@@ -35,6 +36,9 @@ pub struct HoshiClient {
             Box<dyn Fn(&Self, &str, &HashMap<String, ChatMessage>)>,
         )>,
     >,
+
+    nodes: RefCell<NodeStore>,
+    node_interests: RefCell<HashSet<String>>,
 }
 
 impl HoshiClient {
@@ -47,6 +51,7 @@ impl HoshiClient {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let node_store_path = path.with_file_name("nodes");
         let db = Database::new(path)?;
 
         let public_key = match db.config_get_blocking("public_key") {
@@ -60,7 +65,6 @@ impl HoshiClient {
             }
         };
 
-        db.messages_get()?;
         db.contacts_get()?;
 
         let contacts = RefCell::new(HashMap::new());
@@ -85,7 +89,7 @@ impl HoshiClient {
         Ok(Self {
             net,
             db,
-            public_key: RefCell::new(public_key),
+            public_key: RefCell::new(public_key.clone()),
 
             audio_interface: RefCell::new(None),
 
@@ -97,6 +101,9 @@ impl HoshiClient {
 
             messages,
             messages_watchers,
+
+            nodes: RefCell::new(NodeStore::new(Some(node_store_path), public_key)),
+            node_interests: RefCell::new(HashSet::new()),
         })
     }
 
@@ -104,26 +111,85 @@ impl HoshiClient {
         *self.audio_interface.borrow_mut() = interface;
     }
 
-    fn request_chat_messages(&self, contact: &Contact) {
-        let msg = HoshiMessage::new(
-            self.public_key(),
-            contact.public_key.to_string(),
-            HoshiPayload::RequestChatMessages,
-        );
-        self.net.send(msg);
+    pub fn node_interest_add(&self, path: &str) {
+        self.node_interests.borrow_mut().insert(path.to_string());
     }
 
-    fn send_chat_history(&self, public_key: &str) {
-        let chat_id = ChatMessage::calc_chat_id(public_key, &self.public_key());
-        if let Some(chat) = self.messages.borrow().get(&chat_id) {
-            for msg in chat.values() {
-                self.net.send(HoshiMessage::new(
-                    self.public_key(),
-                    public_key.to_string(),
-                    HoshiPayload::ChatMessage(msg.clone()),
-                ));
+    pub fn node_interest_remove(&self, path: &str) {
+        self.node_interests.borrow_mut().remove(path);
+    }
+
+    fn is_node_interested(&self, path: &str) -> bool {
+        let interests = self.node_interests.borrow();
+        for interest in interests.iter() {
+            if path == interest {
+                return true;
+            }
+            if let Some(rest) = path.strip_prefix(interest.as_str()) {
+                if rest.starts_with('/') && !rest[1..].contains('/') {
+                    return true;
+                }
             }
         }
+        false
+    }
+
+    fn node_sync(&self, peer_key: &str, path: &str, have_local_data: bool) {
+        if have_local_data {
+            // We have data but hashes differ — drill down to find differences
+            self.net.send(HoshiMessage::new(
+                self.public_key(),
+                peer_key.to_string(),
+                HoshiPayload::NodeList {
+                    path: path.to_string(),
+                },
+            ));
+        } else {
+            // We have nothing for this path — request the data directly
+            self.net.send(HoshiMessage::new(
+                self.public_key(),
+                peer_key.to_string(),
+                HoshiPayload::NodeRequest {
+                    path: path.to_string(),
+                },
+            ));
+        }
+    }
+
+    fn advertise_chat(&self, peer_key: &str) {
+        let path = chat_path(&self.public_key(), peer_key);
+        self.node_interest_add(&path);
+        let mut nodes = self.nodes.borrow_mut();
+        let h = nodes.hash(&path);
+        self.net.send(HoshiMessage::new(
+            self.public_key(),
+            peer_key.to_string(),
+            HoshiPayload::NodeAdvertise {
+                path,
+                hash: h.as_bytes().to_vec(),
+            },
+        ));
+    }
+
+    fn rebuild_chat_messages(&self, cp: &str, peer_key: &str) {
+        let msgs = {
+            let mut nodes = self.nodes.borrow_mut();
+            ChatMessage::messages_from_nodes(&mut nodes, cp, &self.public_key(), peer_key)
+        };
+        self.messages.borrow_mut().insert(cp.to_string(), msgs);
+        self.messages_changed(cp.to_string());
+    }
+
+    /// Figure out the peer key for a chat path by looking at contacts
+    fn peer_key_for_chat_path(&self, cp: &str) -> Option<String> {
+        let contacts = self.contacts.borrow();
+        let own_key = self.public_key();
+        for contact in contacts.values() {
+            if chat_path(&own_key, &contact.public_key) == cp {
+                return Some(contact.public_key.clone());
+            }
+        }
+        None
     }
 
     pub fn call_start(&self, parties: Vec<Contact>) {
@@ -328,27 +394,12 @@ impl HoshiClient {
                     self.contacts.borrow_mut().clear();
 
                     for c in new_contacts {
-                        if self.contact_get(&c.public_key).is_none() {
-                            self.request_chat_messages(&c);
-                            self.send_chat_history(&c.public_key);
-                        }
+                        self.advertise_chat(&c.public_key);
                         let public_key = c.public_key.clone();
                         self.contacts.borrow_mut().insert(public_key, c);
                     }
                 }
                 self.contacts_changed();
-            }
-            DBReply::Messages(msgs) => {
-                let mut chat_ids = HashSet::new();
-                for msg in msgs {
-                    let chat_id = msg.chat_id();
-                    chat_ids.insert(chat_id.to_string());
-                    self.save_chat_message(msg);
-                }
-
-                for chat_id in chat_ids.drain() {
-                    self.messages_changed(chat_id);
-                }
             }
         }
     }
@@ -363,15 +414,8 @@ impl HoshiClient {
     pub fn step(&self) -> u32 {
         for net_msg in self.net.step() {
             match net_msg.payload {
-                HoshiPayload::ChatMessage(chat_msg) => {
-                    let chat_id = chat_msg.chat_id();
-                    if self.save_chat_message(chat_msg.clone()) {
-                        let _ = self.db.message_upsert(chat_msg);
-                        self.messages_changed(chat_id);
-                    }
-                }
-                HoshiPayload::RequestChatMessages => {
-                    self.send_chat_history(&net_msg.from_key);
+                HoshiPayload::ChatMessage(_) | HoshiPayload::RequestChatMessages => {
+                    // Legacy — handled by NodeStore sync now
                 }
                 HoshiPayload::UpdateCallState { call_id, events } => {
                     let mut found = false;
@@ -433,6 +477,87 @@ impl HoshiClient {
                         }
                     }
                 }
+                HoshiPayload::NodeAdvertise { path, hash } => {
+                    if !self.is_node_interested(&path) {
+                        continue;
+                    }
+                    let mut nodes = self.nodes.borrow_mut();
+                    if !nodes.may_read(&net_msg.from_key, &path) {
+                        continue;
+                    }
+                    if let Ok(remote_hash) = <[u8; 32]>::try_from(hash.as_slice()) {
+                        let remote_hash = blake3::Hash::from(remote_hash);
+                        let local_hash = nodes.get_hash(&path);
+                        if local_hash != Some(remote_hash) {
+                            drop(nodes);
+                            self.node_sync(&net_msg.from_key, &path, local_hash.is_some());
+                        }
+                    }
+                }
+                HoshiPayload::NodePut { path, payload, hash } => {
+                    if let Ok(node) = rmp_serde::from_slice::<HoshiNode>(&payload) {
+                        let mut nodes = self.nodes.borrow_mut();
+                        if nodes.may_write(&net_msg.from_key, &path, &node) {
+                            nodes.insert(node);
+                            if let Ok(h) = <[u8; 32]>::try_from(hash.as_slice()) {
+                                nodes.set_hash(path.clone(), blake3::Hash::from(h));
+                            }
+                        }
+                        drop(nodes);
+                        if path.starts_with("/chat/") {
+                            // Extract the chat path (/chat/{xor_hex}) from the full node path
+                            let parts: Vec<&str> = path.splitn(4, '/').collect();
+                            if parts.len() >= 3 {
+                                let cp = format!("/{}/{}", parts[1], parts[2]);
+                                if let Some(peer_key) = self.peer_key_for_chat_path(&cp) {
+                                    self.rebuild_chat_messages(&cp, &peer_key);
+                                }
+                            }
+                        }
+                    }
+                }
+                HoshiPayload::NodeList { path } => {
+                    let mut nodes = self.nodes.borrow_mut();
+                    if !nodes.may_read(&net_msg.from_key, &path) {
+                        continue;
+                    }
+                    let children: Vec<String> = nodes
+                        .children(&path)
+                        .iter()
+                        .map(|n| n.path.clone())
+                        .collect();
+                    for child_path in children {
+                        let h = nodes.hash(&child_path);
+                        self.net.send(HoshiMessage::new(
+                            self.public_key(),
+                            net_msg.from_key.clone(),
+                            HoshiPayload::NodeAdvertise {
+                                path: child_path,
+                                hash: h.as_bytes().to_vec(),
+                            },
+                        ));
+                    }
+                }
+                HoshiPayload::NodeRequest { path } => {
+                    let mut nodes = self.nodes.borrow_mut();
+                    if !nodes.may_read(&net_msg.from_key, &path) {
+                        continue;
+                    }
+                    if let Some(node) = nodes.get(&path) {
+                        if let Ok(payload) = rmp_serde::to_vec(node) {
+                            let h = nodes.hash(&path);
+                            self.net.send(HoshiMessage::new(
+                                self.public_key(),
+                                net_msg.from_key.clone(),
+                                HoshiPayload::NodePut {
+                                    path,
+                                    payload,
+                                    hash: h.as_bytes().to_vec(),
+                                },
+                            ));
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -470,40 +595,31 @@ impl HoshiClient {
         msgs
     }
 
-    fn save_chat_message(&self, msg: ChatMessage) -> bool {
-        let chat_id = msg.chat_id();
-        {
-            let mut chats = self.messages.borrow_mut();
-            let chat = chats.get_mut(&chat_id);
-            if let Some(chat) = chat {
-                // Skip duplicate messages
-                if chat.contains_key(&msg.id) {
-                    return false;
-                }
-                chat.insert(msg.id.to_string(), msg.clone());
-                true
-            } else {
-                let mut chat = HashMap::new();
-                chat.insert(msg.id.to_string(), msg.clone());
-                chats.insert(chat_id.clone(), chat);
-                true
-            }
-        }
-    }
-
-    /// Update or insert a message, prefer insertion since in the future this
-    /// function might be removed and replaced with a message_insert function,
-    /// meant as a simple way to get an MVP working.
     pub fn message_upsert(&self, msg: ChatMessage) -> Result<()> {
-        let chat_id = msg.chat_id();
-        self.save_chat_message(msg.clone());
-        self.db.message_upsert(msg.clone())?;
-        self.net.send(HoshiMessage::new(
-            self.public_key(),
-            msg.to.clone(),
-            HoshiPayload::ChatMessage(msg),
-        ));
-        self.messages_changed(chat_id);
+        let cp = msg.chat_id();
+        let msg_uuid = uuid::Uuid::now_v7().to_string();
+        let text_uuid = uuid::Uuid::now_v7().to_string();
+        let msg_path = format!("{cp}/{msg_uuid}");
+        let text_path = format!("{msg_path}/{text_uuid}");
+
+        {
+            let mut nodes = self.nodes.borrow_mut();
+            nodes.insert(HoshiNode {
+                from: msg.from.clone(),
+                path: msg_path,
+                payload: HoshiNodePayload::Message,
+            });
+            nodes.insert(HoshiNode {
+                from: msg.from.clone(),
+                path: text_path,
+                payload: HoshiNodePayload::ChatText {
+                    content: msg.content.clone(),
+                },
+            });
+        }
+
+        self.advertise_chat(&msg.to);
+        self.rebuild_chat_messages(&cp, &msg.to);
 
         Ok(())
     }
@@ -576,7 +692,7 @@ impl HoshiClient {
             let contact = contact.clone();
             contacts.insert(contact.public_key.clone(), contact);
         }
-        self.request_chat_messages(&contact);
+        self.advertise_chat(&contact.public_key);
         self.db.contact_upsert(contact)?;
         self.contacts_changed();
 

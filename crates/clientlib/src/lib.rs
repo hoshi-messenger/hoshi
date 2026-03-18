@@ -6,6 +6,7 @@ mod contact;
 mod database;
 mod hoshi_client;
 mod hoshi_net_client;
+mod node;
 mod relay;
 
 pub use audio_chunk::AudioChunk;
@@ -18,4 +19,5 @@ pub use contact::Contact;
 pub(crate) use database::Database;
 pub use hoshi_client::HoshiClient;
 pub use hoshi_net_client::{HoshiEnvelope, HoshiMessage, HoshiNetClient, HoshiPayload};
+pub use node::{HoshiNode, HoshiNodePayload, NodeStore, chat_path};
 pub use relay::RelayInfo;

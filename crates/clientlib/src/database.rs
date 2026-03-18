@@ -7,7 +7,7 @@ use std::{
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::{ChatMessage, Contact};
+use crate::Contact;
 
 #[derive(Debug, Clone)]
 enum DBMessage {
@@ -17,9 +17,6 @@ enum DBMessage {
     ContactUpsert(Contact),
     ContactDelete { public_key: String },
 
-    MessagesGet,
-    MessageUpsert(ChatMessage),
-
     ConfigGet(String),
     ConfigSet { key: String, value: Vec<u8> },
 }
@@ -28,7 +25,6 @@ enum DBMessage {
 pub enum DBReply {
     Shutdown,
     Contacts(Vec<Contact>),
-    Messages(Vec<ChatMessage>),
     Config(Option<Vec<u8>>),
 }
 
@@ -127,43 +123,6 @@ impl Database {
                                 tx.send(DBReply::Contacts(contacts))
                                     .expect("DB couldn't send contacts to client");
                             }
-                            DBMessage::MessagesGet => {
-                                let mut stmt = conn.prepare(
-                                "SELECT id, created_at, from_key, to_key, content FROM chat"
-                                ).expect("Error preparing chat query");
-                                let messages = stmt
-                                    .query_map([], |row| {
-                                        Ok(ChatMessage::new(
-                                            row.get(0)?,
-                                            row.get(1)?,
-                                            row.get(2)?,
-                                            row.get(3)?,
-                                            row.get(4)?,
-                                        ))
-                                    })
-                                    .expect("Error querying contacts")
-                                    .filter_map(|r| r.ok())
-                                    .collect();
-
-                                tx.send(DBReply::Messages(messages))
-                                    .expect("DB couldn't send chat messages to client");
-                            }
-                            DBMessage::MessageUpsert(msg) => {
-                                conn.execute(
-                                    "INSERT INTO chat (id, created_at, from_key, to_key, content)
-                                VALUES (?1, ?2, ?3, ?4, ?5)
-                                ON CONFLICT(id) DO UPDATE SET
-                                    content = excluded.content",
-                                    rusqlite::params![
-                                        msg.id,
-                                        msg.created_at,
-                                        msg.from,
-                                        msg.to,
-                                        msg.content
-                                    ],
-                                )
-                                .expect("Error upserting chat");
-                            }
                             DBMessage::ConfigGet(key) => {
                                 let val: Option<Vec<u8>> = conn
                                     .query_row(
@@ -193,16 +152,6 @@ impl Database {
             rx: db_rx,
             thread: Some(thread),
         })
-    }
-
-    pub fn messages_get(&self) -> Result<()> {
-        self.tx.send(DBMessage::MessagesGet)?;
-        Ok(())
-    }
-
-    pub fn message_upsert(&self, msg: ChatMessage) -> Result<()> {
-        self.tx.send(DBMessage::MessageUpsert(msg))?;
-        Ok(())
     }
 
     pub fn contacts_get(&self) -> Result<()> {

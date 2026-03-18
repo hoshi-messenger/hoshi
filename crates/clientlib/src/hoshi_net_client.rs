@@ -246,4 +246,19 @@ pub enum HoshiPayload {
         call_id: String,
         chunk: AudioChunk,
     },
+    NodeAdvertise {
+        path: String,
+        hash: Vec<u8>,
+    },
+    NodePut {
+        path: String,
+        payload: Vec<u8>,
+        hash: Vec<u8>,
+    },
+    NodeList {
+        path: String,
+    },
+    NodeRequest {
+        path: String,
+    },
 }
