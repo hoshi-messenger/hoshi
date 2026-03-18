@@ -80,6 +80,9 @@ impl HoshiNetClient {
             }
         }
 
+        // Remove dead pipes so they get recreated on next step
+        self.pipes.borrow_mut().retain(|p| !p.tx.is_closed());
+
         received
     }
 }
@@ -107,12 +110,9 @@ impl WebSocketPipe {
                     .unwrap();
                 rt.block_on(async move {
                     loop {
-                        tokio::time::sleep(Duration::from_millis(connection_attempts * 200)).await;
+                        let backoff = (connection_attempts * 200).min(10_000);
+                        tokio::time::sleep(Duration::from_millis(backoff)).await;
                         connection_attempts += 1;
-                        if connection_attempts > 10 {
-                            eprintln!("Connection to {} failed too many times, aborting", &relay.url);
-                            return;
-                        }
                         let ws = match reqwest::Client::default()
                             .get(&relay.url)
                             .header("Authorization", format!("Bearer {}", public_key))

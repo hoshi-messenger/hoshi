@@ -1,7 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use redb::{Database, TableDefinition};
 use serde::{Deserialize, Serialize};
+
+const NODES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("nodes");
+const HASHES_TABLE: TableDefinition<&str, &[u8; 32]> = TableDefinition::new("hashes");
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HoshiNode {
@@ -26,28 +30,61 @@ pub enum HoshiNodePayload {
 pub struct NodeStore {
     nodes: BTreeMap<String, HoshiNode>,
     hashes: BTreeMap<String, blake3::Hash>,
-    root: Option<PathBuf>,
+    db: Option<Database>,
     public_key: String,
 }
 
 impl NodeStore {
     pub fn new(root: Option<PathBuf>, public_key: String) -> Self {
-        if let Some(root) = &root {
-            std::fs::create_dir_all(root).expect("failed to create node store root directory");
-        }
+        let db = root.map(|path| {
+            std::fs::create_dir_all(&path).expect("failed to create node store directory");
+            Database::create(path.join("nodes.redb")).expect("failed to open redb database")
+        });
         Self {
             nodes: BTreeMap::new(),
             hashes: BTreeMap::new(),
-            root,
+            db,
             public_key,
         }
     }
 
     pub fn insert(&mut self, node: HoshiNode) {
-        self.invalidate_ancestors(&node.path);
+        // Collect ancestor paths to invalidate
+        let ancestors: Vec<String> = {
+            let mut result = Vec::new();
+            let mut current = node.path.as_str();
+            while let Some(pos) = current.rfind('/') {
+                current = &node.path[..pos];
+                result.push(current.to_string());
+            }
+            result
+        };
+
+        // Single DB transaction for node write + hash invalidation
+        if let Some(db) = &self.db {
+            let data = rmp_serde::to_vec(&node).unwrap_or_default();
+            let write_txn = db.begin_write().unwrap();
+            {
+                let mut nodes_table = write_txn.open_table(NODES_TABLE).unwrap();
+                nodes_table
+                    .insert(node.path.as_str(), data.as_slice())
+                    .unwrap();
+            }
+            {
+                let mut hashes_table = write_txn.open_table(HASHES_TABLE).unwrap();
+                let _ = hashes_table.remove(node.path.as_str());
+                for ancestor in &ancestors {
+                    let _ = hashes_table.remove(ancestor.as_str());
+                }
+            }
+            write_txn.commit().unwrap();
+        }
+
+        // Update in-memory state
         self.hashes.remove(&node.path);
-        self.write_node_to_disk(&node);
-        self.remove_hash_from_disk(&node.path);
+        for ancestor in &ancestors {
+            self.hashes.remove(ancestor);
+        }
         self.nodes.insert(node.path.clone(), node);
     }
 
@@ -289,93 +326,75 @@ impl NodeStore {
             .map(|(k, _)| k.as_str())
     }
 
-    fn invalidate_ancestors(&mut self, path: &str) {
-        let mut current = path;
-        while let Some(pos) = current.rfind('/') {
-            current = &path[..pos];
-            self.hashes.remove(current);
-            self.remove_hash_from_disk(current);
-        }
-    }
-
-    // -- Filesystem helpers --
-
-    fn dir_for_path(&self, path: &str) -> Option<PathBuf> {
-        self.root.as_ref().map(|root| {
-            let relative = path.strip_prefix('/').unwrap_or(path);
-            if relative.is_empty() {
-                root.clone()
-            } else {
-                root.join(relative)
-            }
-        })
-    }
-
-    fn write_node_to_disk(&self, node: &HoshiNode) {
-        if let Some(dir) = self.dir_for_path(&node.path) {
-            let _ = std::fs::create_dir_all(&dir);
-            let data = rmp_serde::to_vec(node).unwrap_or_default();
-            let _ = std::fs::write(dir.join("__CONTENT__"), &data);
-        }
-    }
+    // -- redb helpers --
 
     fn read_node_from_disk(&self, path: &str) -> Option<HoshiNode> {
-        let dir = self.dir_for_path(path)?;
-        let data = std::fs::read(dir.join("__CONTENT__")).ok()?;
-        let mut node: HoshiNode = rmp_serde::from_slice(&data).ok()?;
+        let db = self.db.as_ref()?;
+        let read_txn = db.begin_read().ok()?;
+        let table = read_txn.open_table(NODES_TABLE).ok()?;
+        let value = table.get(path).ok()??;
+        let mut node: HoshiNode = rmp_serde::from_slice(value.value()).ok()?;
         node.path = path.to_string();
         Some(node)
     }
 
     fn write_hash_to_disk(&self, path: &str, hash: &blake3::Hash) {
-        if let Some(dir) = self.dir_for_path(path) {
-            let _ = std::fs::create_dir_all(&dir);
-            let _ = std::fs::write(dir.join("__HASH__"), hash.as_bytes());
+        if let Some(db) = &self.db {
+            let write_txn = db.begin_write().unwrap();
+            {
+                let mut table = write_txn.open_table(HASHES_TABLE).unwrap();
+                table.insert(path, hash.as_bytes()).unwrap();
+            }
+            write_txn.commit().unwrap();
         }
     }
 
     fn read_hash_from_disk(&self, path: &str) -> Option<blake3::Hash> {
-        let dir = self.dir_for_path(path)?;
-        let data = std::fs::read(dir.join("__HASH__")).ok()?;
-        let bytes: [u8; 32] = data.try_into().ok()?;
-        Some(blake3::Hash::from(bytes))
-    }
-
-    fn remove_hash_from_disk(&self, path: &str) {
-        if let Some(dir) = self.dir_for_path(path) {
-            let _ = std::fs::remove_file(dir.join("__HASH__"));
-        }
+        let db = self.db.as_ref()?;
+        let read_txn = db.begin_read().ok()?;
+        let table = read_txn.open_table(HASHES_TABLE).ok()?;
+        let value = table.get(path).ok()??;
+        Some(blake3::Hash::from(*value.value()))
     }
 
     fn load_children_from_disk(&mut self, path: &str) {
-        let dir = match self.dir_for_path(path) {
-            Some(d) => d,
+        let db = match &self.db {
+            Some(db) => db,
             None => return,
         };
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
+        let read_txn = match db.begin_read() {
+            Ok(t) => t,
             Err(_) => return,
         };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name == "__CONTENT__" || name == "__HASH__" {
-                continue;
-            }
-            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                continue;
-            }
-            let child_path = format!("{path}/{name}");
-            if self.nodes.contains_key(&child_path) {
-                continue;
-            }
-            let content_file = dir.join(name.as_ref()).join("__CONTENT__");
-            if let Ok(data) = std::fs::read(&content_file) {
+        let table = match read_txn.open_table(NODES_TABLE) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+
+        let prefix = format!("{path}/");
+        let prefix_len = prefix.len();
+        let range_end = format!("{path}0"); // '0' is the char after '/'
+
+        let mut to_insert = Vec::new();
+        if let Ok(range) = table.range::<&str>(prefix.as_str()..range_end.as_str()) {
+            for entry in range {
+                let Ok(entry) = entry else { continue };
+                let key = entry.0.value().to_string();
+                if key[prefix_len..].contains('/') {
+                    continue;
+                }
+                if self.nodes.contains_key(&key) {
+                    continue;
+                }
+                let data = entry.1.value().to_vec();
                 if let Ok(mut node) = rmp_serde::from_slice::<HoshiNode>(&data) {
-                    node.path = child_path.clone();
-                    self.nodes.insert(child_path, node);
+                    node.path = key.clone();
+                    to_insert.push((key, node));
                 }
             }
+        }
+        for (key, node) in to_insert {
+            self.nodes.insert(key, node);
         }
     }
 }

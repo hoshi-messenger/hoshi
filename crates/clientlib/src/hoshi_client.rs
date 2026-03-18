@@ -2,6 +2,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     path::PathBuf,
+    time::{Duration, Instant},
 };
 
 use rand_core::{OsRng, RngCore};
@@ -38,6 +39,9 @@ pub struct HoshiClient {
 
     nodes: RefCell<NodeStore>,
     node_interests: RefCell<HashSet<String>>,
+
+    last_sync: RefCell<Instant>,
+    sync_index: RefCell<usize>,
 }
 
 impl HoshiClient {
@@ -67,10 +71,22 @@ impl HoshiClient {
         }
         let contacts = RefCell::new(contacts);
         let contacts_watchers = RefCell::new(vec![]);
-        let messages = RefCell::new(HashMap::new());
         let messages_watchers = RefCell::new(vec![]);
         let incoming_calls = RefCell::new(vec![]);
         let incoming_call_watchers = RefCell::new(vec![]);
+
+        // Register node interests and load messages for all existing chats
+        let mut node_interests = HashSet::new();
+        let mut messages_map: HashMap<String, HashMap<String, ChatMessage>> = HashMap::new();
+        for contact in contacts.borrow().values() {
+            let cp = chat_path(&public_key, &contact.public_key);
+            node_interests.insert(cp.clone());
+            let msgs =
+                ChatMessage::messages_from_nodes(&mut nodes, &cp, &public_key, &contact.public_key);
+            if !msgs.is_empty() {
+                messages_map.insert(cp, msgs);
+            }
+        }
 
         let relay_list = if cfg!(debug_assertions) {
             vec!["ws://127.0.0.1:2800/".into()]
@@ -96,11 +112,14 @@ impl HoshiClient {
             contacts,
             contacts_watchers,
 
-            messages,
+            messages: RefCell::new(messages_map),
             messages_watchers,
 
             nodes: RefCell::new(nodes),
-            node_interests: RefCell::new(HashSet::new()),
+            node_interests: RefCell::new(node_interests),
+
+            last_sync: RefCell::new(Instant::now()),
+            sync_index: RefCell::new(0),
         })
     }
 
@@ -590,6 +609,18 @@ impl HoshiClient {
         });
         if self.calls.borrow().len() != before {
             self.calls_changed();
+        }
+
+        // Periodic sync: advertise one contact per tick (round-robin)
+        let now = Instant::now();
+        if now.duration_since(*self.last_sync.borrow()) > Duration::from_secs(5) {
+            *self.last_sync.borrow_mut() = now;
+            let contact_keys: Vec<String> = self.contacts.borrow().keys().cloned().collect();
+            if !contact_keys.is_empty() {
+                let idx = *self.sync_index.borrow() % contact_keys.len();
+                *self.sync_index.borrow_mut() = idx + 1;
+                self.advertise_chat(&contact_keys[idx]);
+            }
         }
 
         msgs
