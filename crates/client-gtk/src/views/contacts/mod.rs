@@ -8,7 +8,7 @@ use hoshi_clientlib::{CallPartyStatus, Contact, ContactType};
 use crate::AppState;
 
 use chat::view_chat_page;
-use modals::{show_add_contact_dialog, show_delete_contact_dialog, show_edit_contact_dialog};
+use modals::{show_add_contact_dialog, show_delete_contact_dialog};
 
 fn create_icon_button(icon: &str, label: &str) -> Button {
     let button = Button::builder().valign(gtk::Align::Center).build();
@@ -23,6 +23,11 @@ fn create_icon_button(icon: &str, label: &str) -> Button {
 }
 
 fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Box {
+    let display_name = state
+        .client
+        .user_alias(&contact.public_key)
+        .unwrap_or_else(|| contact.alias.clone());
+
     let avatar_size = if wide_view { 64 } else { 40 };
 
     let avatar = Avatar::builder()
@@ -32,12 +37,12 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
         .margin_top(8)
         .margin_bottom(8)
         .show_initials(false)
-        .text(&contact.alias)
+        .text(&display_name)
         .build();
 
     let alias_label = Label::builder()
         .halign(gtk::Align::Start)
-        .label(&contact.alias)
+        .label(&display_name)
         .build();
     alias_label.add_css_class("heading");
 
@@ -104,17 +109,6 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
         hbox.append(&call_button);
 
         if contact.contact_type == ContactType::Contact {
-            let edit_button = create_icon_button("document-edit-symbolic", "Edit");
-            edit_button.add_css_class("flat");
-            {
-                let state = state.clone();
-                let contact = contact.clone();
-                edit_button.connect_clicked(move |_| {
-                    show_edit_contact_dialog(&state.win, state.clone(), &contact);
-                });
-            }
-            hbox.append(&edit_button);
-
             let delete_button = create_icon_button("user-trash-symbolic", "Delete");
             delete_button.add_css_class("flat");
             {

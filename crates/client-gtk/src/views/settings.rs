@@ -1,4 +1,5 @@
 use adw::{EntryRow, NavigationPage, PreferencesGroup, PreferencesPage, prelude::*};
+use gtk::Entry;
 
 use crate::AppState;
 
@@ -33,6 +34,72 @@ pub fn view_settings(state: AppState) {
 
     identity_group.add(&key_row);
     prefs.add(&identity_group);
+
+    let profile_group = PreferencesGroup::builder()
+        .title("Profile")
+        .description("Set a display name visible to your contacts.")
+        .build();
+
+    let current_alias = state
+        .client
+        .user_alias(&state.client.public_key())
+        .unwrap_or_default();
+    let alias_row = EntryRow::builder()
+        .title("Display Name")
+        .text(&current_alias)
+        .show_apply_button(true)
+        .build();
+
+    {
+        let state = state.clone();
+        alias_row.connect_apply(move |row| {
+            let alias = row.text().to_string();
+            state.client.set_user_alias(&alias);
+        });
+    }
+
+    profile_group.add(&alias_row);
+    prefs.add(&profile_group);
+
     page.set_child(Some(&prefs));
     state.nav.push(&page);
+}
+
+pub fn prompt_user_alias_if_needed(state: &AppState) {
+    let pk = state.client.public_key();
+    if state.client.user_alias(&pk).is_some() {
+        return;
+    }
+
+    let dialog = adw::AlertDialog::builder()
+        .heading("Welcome to Hoshi!")
+        .body("Choose a name so your friends know who you are.")
+        .build();
+
+    let alias_entry = Entry::builder().placeholder_text("Display Name").build();
+    alias_entry.connect_map(|e| {
+        e.grab_focus();
+    });
+
+    dialog.set_extra_child(Some(&alias_entry));
+
+    dialog.add_response("skip", "Skip");
+    dialog.add_response("save", "Save");
+    dialog.set_default_response(Some("save"));
+    dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+
+    alias_entry.set_activates_default(true);
+
+    let state = state.clone();
+    dialog.connect_response(None, move |dialog, response| {
+        if response == "save" {
+            let alias = alias_entry.text().to_string();
+            if !alias.is_empty() {
+                state.client.set_user_alias(&alias);
+            }
+        }
+        dialog.close();
+    });
+
+    dialog.present(Some(&state.win));
 }

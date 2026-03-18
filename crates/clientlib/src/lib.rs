@@ -17,5 +17,7 @@ pub use chat::ChatMessage;
 pub use contact::{Contact, ContactType};
 pub use hoshi_client::HoshiClient;
 pub use hoshi_net_client::{HoshiEnvelope, HoshiMessage, HoshiNetClient, HoshiPayload};
-pub use node::{HoshiNode, HoshiNodePayload, NodeStore, chat_path, peer_key_from_chat_path};
+pub use node::{
+    HoshiNode, HoshiNodePayload, NodeStore, chat_path, peer_key_from_chat_path, user_path,
+};
 pub use relay::RelayInfo;

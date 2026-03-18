@@ -15,6 +15,7 @@ use crate::{
     call::{CallPartyEvent, CallPartyStatus},
     chat_path,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
+    user_path,
 };
 
 pub struct HoshiClient {
@@ -81,6 +82,9 @@ impl HoshiClient {
         for contact in contacts.borrow().values() {
             let cp = chat_path(&public_key, &contact.public_key);
             node_interests.insert(cp.clone());
+            if contact.contact_type != crate::ContactType::Blocked {
+                node_interests.insert(user_path(&contact.public_key));
+            }
             let msgs =
                 ChatMessage::messages_from_nodes(&mut nodes, &cp, &public_key, &contact.public_key);
             if !msgs.is_empty() {
@@ -198,6 +202,20 @@ impl HoshiClient {
     fn advertise_chat(&self, peer_key: &str) {
         let path = chat_path(&self.public_key(), peer_key);
         self.node_interest_add(&path);
+        let mut nodes = self.nodes.borrow_mut();
+        let h = nodes.hash(&path);
+        self.net.send(HoshiMessage::new(
+            self.public_key(),
+            peer_key.to_string(),
+            HoshiPayload::NodeAdvertise {
+                path,
+                hash: h.as_bytes().to_vec(),
+            },
+        ));
+    }
+
+    fn advertise_user(&self, peer_key: &str) {
+        let path = user_path(&self.public_key());
         let mut nodes = self.nodes.borrow_mut();
         let h = nodes.hash(&path);
         self.net.send(HoshiMessage::new(
@@ -382,6 +400,18 @@ impl HoshiClient {
         Contact::new(self.public_key(), None)
     }
 
+    pub fn set_user_alias(&self, alias: &str) {
+        self.nodes.borrow_mut().user_alias_set(alias);
+        let contact_keys: Vec<String> = self.contacts.borrow().keys().cloned().collect();
+        for key in &contact_keys {
+            self.advertise_user(key);
+        }
+    }
+
+    pub fn user_alias(&self, public_key: &str) -> Option<String> {
+        self.nodes.borrow_mut().user_alias_get(public_key)
+    }
+
     pub fn set_public_key(&self, key: String) -> Result<()> {
         self.net.set_public_key(key.clone());
         self.net.disconnect_all();
@@ -513,6 +543,9 @@ impl HoshiClient {
                             }
                         }
                         drop(nodes);
+                        if path.starts_with("/user/") {
+                            self.contacts_changed();
+                        }
                         if path.starts_with("/chat/") {
                             // Extract the chat path (/chat/{xor_hex}) from the full node path
                             let parts: Vec<&str> = path.splitn(4, '/').collect();
@@ -622,6 +655,7 @@ impl HoshiClient {
                 let idx = *self.sync_index.borrow() % contact_keys.len();
                 *self.sync_index.borrow_mut() = idx + 1;
                 self.advertise_chat(&contact_keys[idx]);
+                self.advertise_user(&contact_keys[idx]);
             }
         }
 
@@ -726,6 +760,11 @@ impl HoshiClient {
             contacts.insert(contact.public_key.clone(), contact);
         }
         self.advertise_chat(&contact.public_key);
+        if contact.contact_type != crate::ContactType::Blocked {
+            self.node_interest_add(&user_path(&contact.public_key));
+        } else {
+            self.node_interest_remove(&user_path(&contact.public_key));
+        }
         self.nodes.borrow_mut().contact_upsert(&contact);
         self.contacts_changed();
 
@@ -740,6 +779,7 @@ impl HoshiClient {
             let mut contacts = self.contacts.borrow_mut();
             contacts.remove(public_key);
         }
+        self.node_interest_remove(&user_path(public_key));
         self.nodes.borrow_mut().contact_delete(public_key);
         self.contacts_changed();
 

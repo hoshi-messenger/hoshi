@@ -7,7 +7,7 @@ use crate::{Args, init_audio_interfaces, init_call_banner};
 use adw::{Application, ApplicationWindow, HeaderBar, NavigationView, ToolbarView, prelude::*};
 use gtk::CssProvider;
 
-use crate::{view_contact_list, view_settings};
+use crate::{prompt_user_alias_if_needed, view_contact_list, view_settings};
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -170,7 +170,8 @@ impl AppState {
                 }
             });
         }
-        view_contact_list(state);
+        view_contact_list(state.clone());
         win.present();
+        prompt_user_alias_if_needed(&state);
     }
 }

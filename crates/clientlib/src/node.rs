@@ -26,6 +26,7 @@ pub enum HoshiNodePayload {
     ContactAlias(String),
     ContactDeleted,
     ContactType(String),
+    UserAlias(String),
 }
 
 pub struct NodeStore {
@@ -251,7 +252,6 @@ impl NodeStore {
     pub fn contact_upsert(&mut self, contact: &crate::Contact) {
         let contact_path = format!("/contact/{}", contact.public_key);
         let pk_uuid = uuid::Uuid::now_v7().to_string();
-        let alias_uuid = uuid::Uuid::now_v7().to_string();
         let type_uuid = uuid::Uuid::now_v7().to_string();
 
         let type_str = match contact.contact_type {
@@ -272,14 +272,37 @@ impl NodeStore {
         });
         self.insert(HoshiNode {
             from: String::new(),
-            path: format!("{contact_path}/{alias_uuid}"),
-            payload: HoshiNodePayload::ContactAlias(contact.alias.clone()),
-        });
-        self.insert(HoshiNode {
-            from: String::new(),
             path: format!("{contact_path}/{type_uuid}"),
             payload: HoshiNodePayload::ContactType(type_str.to_string()),
         });
+    }
+
+    pub fn user_alias_set(&mut self, alias: &str) {
+        let path = user_path(&self.public_key);
+        let uuid = uuid::Uuid::now_v7().to_string();
+        self.insert(HoshiNode {
+            from: self.public_key.clone(),
+            path: format!("{path}/{uuid}"),
+            payload: HoshiNodePayload::UserAlias(alias.to_string()),
+        });
+    }
+
+    pub fn user_alias_get(&mut self, public_key: &str) -> Option<String> {
+        let path = user_path(public_key);
+        let children: Vec<(String, HoshiNodePayload)> = self
+            .children(&path)
+            .iter()
+            .map(|n| (n.path.clone(), n.payload.clone()))
+            .collect();
+        let mut children = children;
+        children.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut alias = None;
+        for (_, payload) in &children {
+            if let HoshiNodePayload::UserAlias(a) = payload {
+                alias = Some(a.clone());
+            }
+        }
+        alias
     }
 
     pub fn contact_delete(&mut self, public_key: &str) {
@@ -296,6 +319,9 @@ impl NodeStore {
         if path.starts_with("/config/") || path.starts_with("/contact/") {
             return false;
         }
+        if path.starts_with("/user/") {
+            return true;
+        }
         self.is_chat_participant(peer_key, path)
     }
 
@@ -303,7 +329,16 @@ impl NodeStore {
         if path.starts_with("/config/") || path.starts_with("/contact/") {
             return false;
         }
+        if path.starts_with("/user/") {
+            return self.is_user_owner(peer_key, path);
+        }
         self.is_chat_participant(peer_key, path)
+    }
+
+    fn is_user_owner(&self, peer_key: &str, path: &str) -> bool {
+        let rest = path.strip_prefix("/user/").unwrap_or_default();
+        let pk = rest.split('/').next().unwrap_or_default();
+        peer_key == pk
     }
 
     /// Check if `peer_key` is the other participant in a `/chat/{xor_hash}/...` path.
@@ -432,6 +467,10 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+pub fn user_path(public_key: &str) -> String {
+    format!("/user/{public_key}")
 }
 
 /// Compute the chat path for a 1:1 chat between two public keys.
