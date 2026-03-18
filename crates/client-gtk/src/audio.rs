@@ -1,8 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::thread;
 
 use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -19,15 +17,9 @@ const SINK_BUFFER_CAP: usize = 16384;
 /// Source cap: ~100ms at 48kHz. Oldest samples are dropped when exceeded to keep audio live.
 const SOURCE_BUFFER_CAP: usize = 4096;
 
-enum AudioCommand {
-    Play,
-    Pause,
-    Shutdown,
-}
-
 struct ClientStream {
-    cmd_tx: Mutex<mpsc::Sender<AudioCommand>>,
-    _thread: Option<thread::JoinHandle<()>>,
+    sink_stream: Stream,
+    source_stream: Stream,
     playing: Arc<AtomicBool>,
     error: Arc<AtomicBool>,
     source_buffer: Arc<Mutex<VecDeque<i16>>>,
@@ -37,15 +29,6 @@ struct ClientStream {
 impl std::fmt::Debug for ClientStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ClientSink")
-    }
-}
-
-impl Drop for ClientStream {
-    fn drop(&mut self) {
-        let _ = self.cmd_tx.lock().unwrap().send(AudioCommand::Shutdown);
-        if let Some(handle) = self._thread.take() {
-            let _ = handle.join();
-        }
     }
 }
 
@@ -87,13 +70,15 @@ impl AudioStream for ClientStream {
 
     fn play(&self) {
         if !self.playing.swap(true, Ordering::Relaxed) {
-            let _ = self.cmd_tx.lock().unwrap().send(AudioCommand::Play);
+            let _ = self.sink_stream.play();
+            let _ = self.source_stream.play();
         }
     }
 
     fn pause(&self) {
         if self.playing.swap(false, Ordering::Relaxed) {
-            let _ = self.cmd_tx.lock().unwrap().send(AudioCommand::Pause);
+            let _ = self.sink_stream.pause();
+            let _ = self.source_stream.pause();
         }
     }
 
@@ -129,6 +114,33 @@ where
     }
 }
 
+fn find_supported_config(
+    configs: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
+    label: &str,
+) -> Result<(SampleFormat, cpal::StreamConfig)> {
+    let supported = configs
+        .filter(|c| {
+            c.channels() == 1
+                && c.min_sample_rate().0 <= AUDIO_INTERFACE_SAMPLE_RATE
+                && c.max_sample_rate().0 >= AUDIO_INTERFACE_SAMPLE_RATE
+                && (matches!(c.sample_format(), SampleFormat::I16)
+                    || matches!(c.sample_format(), SampleFormat::U16)
+                    || matches!(c.sample_format(), SampleFormat::F32))
+        })
+        .next()
+        .ok_or(anyhow!("{label} device does not support mono 48kHz"))?
+        .with_sample_rate(cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE));
+
+    Ok((
+        supported.sample_format(),
+        cpal::StreamConfig {
+            channels: 1,
+            sample_rate: cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE),
+            buffer_size: cpal::BufferSize::Fixed(4096),
+        },
+    ))
+}
+
 fn build_sink_stream(
     host: &cpal::Host,
     sink_buffers: &Arc<Mutex<HashMap<usize, VecDeque<i16>>>>,
@@ -137,26 +149,8 @@ fn build_sink_stream(
     let device = host
         .default_output_device()
         .ok_or(anyhow!("No output device"))?;
-
-    let supported = device
-        .supported_output_configs()?
-        .find(|c| {
-            c.channels() == 1
-                && c.min_sample_rate().0 <= AUDIO_INTERFACE_SAMPLE_RATE
-                && c.max_sample_rate().0 >= AUDIO_INTERFACE_SAMPLE_RATE
-                && (matches!(c.sample_format(), SampleFormat::I16)
-                    || matches!(c.sample_format(), SampleFormat::U16)
-                    || matches!(c.sample_format(), SampleFormat::F32))
-        })
-        .ok_or(anyhow!("Output device does not support mono 48kHz"))?
-        .with_sample_rate(cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE));
-
-    let sample_format = supported.sample_format();
-    let config = cpal::StreamConfig {
-        channels: 1,
-        sample_rate: cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE),
-        buffer_size: cpal::BufferSize::Fixed(4096),
-    };
+    let (sample_format, config) =
+        find_supported_config(device.supported_output_configs()?, "Output")?;
 
     let err_flag = Arc::clone(error);
     let err_fn = move |err| {
@@ -198,26 +192,8 @@ fn build_source_stream(
     let device = host
         .default_input_device()
         .ok_or(anyhow!("No input device"))?;
-
-    let supported = device
-        .supported_input_configs()?
-        .find(|c| {
-            c.channels() == 1
-                && c.min_sample_rate().0 <= AUDIO_INTERFACE_SAMPLE_RATE
-                && c.max_sample_rate().0 >= AUDIO_INTERFACE_SAMPLE_RATE
-                && (matches!(c.sample_format(), SampleFormat::I16)
-                    || matches!(c.sample_format(), SampleFormat::U16)
-                    || matches!(c.sample_format(), SampleFormat::F32))
-        })
-        .ok_or(anyhow!("Input device does not support mono 48kHz"))?
-        .with_sample_rate(cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE));
-
-    let sample_format = supported.sample_format();
-    let config = cpal::StreamConfig {
-        channels: 1,
-        sample_rate: cpal::SampleRate(AUDIO_INTERFACE_SAMPLE_RATE),
-        buffer_size: cpal::BufferSize::Fixed(4096),
-    };
+    let (sample_format, config) =
+        find_supported_config(device.supported_input_configs()?, "Input")?;
 
     let err_flag = Arc::clone(error);
     let err_fn = move |err| {
@@ -259,56 +235,13 @@ impl ClientStream {
         let playing = Arc::new(AtomicBool::new(false));
         let error = Arc::new(AtomicBool::new(false));
 
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (init_tx, init_rx) = mpsc::channel::<Result<()>>();
-
-        let sb = Arc::clone(&sink_buffers);
-        let srb = Arc::clone(&source_buffer);
-        let err = Arc::clone(&error);
-
-        let handle = thread::Builder::new().name("audio".into()).spawn(move || {
-            let host = cpal::default_host();
-
-            let sink_stream = match build_sink_stream(&host, &sb, &err) {
-                Ok(s) => s,
-                Err(e) => {
-                    let _ = init_tx.send(Err(e));
-                    return;
-                }
-            };
-
-            let source_stream = match build_source_stream(&host, &srb, &err) {
-                Ok(s) => s,
-                Err(e) => {
-                    let _ = init_tx.send(Err(e));
-                    return;
-                }
-            };
-
-            let _ = init_tx.send(Ok(()));
-
-            while let Ok(cmd) = cmd_rx.recv() {
-                match cmd {
-                    AudioCommand::Play => {
-                        let _ = sink_stream.play();
-                        let _ = source_stream.play();
-                    }
-                    AudioCommand::Pause => {
-                        let _ = sink_stream.pause();
-                        let _ = source_stream.pause();
-                    }
-                    AudioCommand::Shutdown => break,
-                }
-            }
-        })?;
-
-        init_rx
-            .recv()
-            .map_err(|_| anyhow!("Audio thread died during init"))??;
+        let host = cpal::default_host();
+        let sink_stream = build_sink_stream(&host, &sink_buffers, &error)?;
+        let source_stream = build_source_stream(&host, &source_buffer, &error)?;
 
         Ok(Self {
-            cmd_tx: Mutex::new(cmd_tx),
-            _thread: Some(handle),
+            sink_stream,
+            source_stream,
             playing,
             error,
             source_buffer,
