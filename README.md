@@ -5,10 +5,14 @@ Monorepo of the Hoshi network/messenger. Still in early development so it's not 
 ## ToDo / Next Steps
 
 - [ ] Use snow for actual crypto
-- [ ] Work on the merkle-tree based sync with gossip support
+- [ ] Spaces / Group Chats
 
 ## Backlog
 
+- [ ] SpaceDirectory bot
+- [ ] Show last message instead of public key, in the chat view show status 
+- [ ] Voice channels in spaces
+- [ ] Rooms in spaces
 - [ ] Add some clientlib unit tests
 - [ ] Add some relay unit tests
 - [ ] Add integration tests between clientlib <-> relay
@@ -17,7 +21,7 @@ Monorepo of the Hoshi network/messenger. Still in early development so it's not 
 Those aren't that important since it's just a prototype, but if there's time might implement
 a couple of them since they shouldn't take too long
 
-- [ ] Allow / Show messages from unknown people, change titleline so that instead of edit/delete we have add/block
+- [ ] UserDirectory bot
 - [ ] Show arrows in chat bubbles only if they're the last (look at Telegram)
 - [ ] Add timestamps before messages
 - [ ] Add timestamps only if there's a pause of more than 5 minutes between messages
@@ -26,7 +30,6 @@ a couple of them since they shouldn't take too long
 - [ ] Contact status indicators
 - [ ] Show relay metrics on the landing page and send it via JSON
 - [ ] Build public global relay dashboard
-- [ ] Show last message instead of public key, in the chat view show status 
 
 ## Long-term polish
 Those are more complicated non-essential tasks, will probably take a while until we get to them
@@ -42,6 +45,8 @@ Those are more complicated non-essential tasks, will probably take a while until
 - [X] Abstract audio interface, shouldn't have Rodio in clientlib
 - [X] Make the clientlib reconnection logic more robust
 - [X] Simple bots (Echo / Jukebox)
+- [X] Work on the merkle-tree based sync with gossip support
+- [X] Allow / Show messages from unknown people, change titleline so that instead of edit/delete we have add/block
 
 ## License
 
