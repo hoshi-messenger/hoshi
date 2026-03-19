@@ -153,6 +153,8 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
                         .css_classes([class, "chat-message"])
                         .label(&msg.content)
                         .selectable(true)
+                        .wrap(true)
+                        .wrap_mode(gtk::pango::WrapMode::WordChar)
                         .build();
 
                     // r, g, b, a matching the bubble CSS color
