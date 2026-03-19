@@ -79,25 +79,6 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
     send_btn.add_css_class("flat");
     send_btn.add_css_class("message-send-btn");
 
-    {
-        let state = state.clone();
-        let contact = contact.clone();
-        let message_input = message_input.clone();
-        let send_btn = send_btn.clone();
-        send_btn.connect_clicked(move |_| {
-            let buffer = message_input.buffer();
-            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
-            if !text.is_empty() {
-                let from = state.client.public_key();
-                let to = contact.public_key.clone();
-                let content = text.to_string();
-                let msg = ChatMessage::create(from, to, content);
-                state.client.message_upsert(msg).expect("Couldn't send msg");
-                buffer.set_text("");
-            }
-        });
-    }
-
     let key_controller = gtk::EventControllerKey::new();
     {
         let send_btn = send_btn.clone();
@@ -135,9 +116,14 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
         let moi = state.client.public_key();
         let chat_id = ChatMessage::calc_chat_id(&state.client.public_key(), &contact.public_key);
         let vbox = vbox.clone();
+        let scroll = scroll.clone();
         state
             .client
             .messages_watch(chat_id, move |_, _chat_id, messages| {
+                let adj = scroll.vadjustment();
+                let at_bottom =
+                    adj.upper() <= 0.0 || adj.value() + adj.page_size() >= adj.upper() - 1.0;
+
                 let mut sorted = messages.values().collect::<Vec<&ChatMessage>>();
                 sorted.sort();
                 clear_box(&vbox);
@@ -207,7 +193,39 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
                     }
                     vbox.append(&row);
                 }
+
+                if at_bottom {
+                    let scroll = scroll.clone();
+                    glib::idle_add_local_once(move || {
+                        let adj = scroll.vadjustment();
+                        adj.set_value(adj.upper() - adj.page_size());
+                    });
+                }
             });
+    }
+    {
+        let state = state.clone();
+        let contact = contact.clone();
+        let message_input = message_input.clone();
+        let send_btn = send_btn.clone();
+        let scroll = scroll.clone();
+        send_btn.connect_clicked(move |_| {
+            let buffer = message_input.buffer();
+            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
+            if !text.is_empty() {
+                let from = state.client.public_key();
+                let to = contact.public_key.clone();
+                let content = text.to_string();
+                let msg = ChatMessage::create(from, to, content);
+                state.client.message_upsert(msg).expect("Couldn't send msg");
+                buffer.set_text("");
+                let scroll = scroll.clone();
+                glib::idle_add_local_once(move || {
+                    let adj = scroll.vadjustment();
+                    adj.set_value(adj.upper() - adj.page_size());
+                });
+            }
+        });
     }
 
     clamp.set_child(Some(&vbox));
