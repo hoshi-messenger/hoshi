@@ -59,6 +59,7 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
         .valign(gtk::Align::Center)
         .hexpand(true)
         .build();
+    vbox.add_css_class("vbox");
     vbox.append(&alias_label);
     vbox.append(&key_label);
 
@@ -68,6 +69,12 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
         .build();
     hbox.append(&avatar);
     hbox.append(&vbox);
+
+    match contact.contact_type {
+        ContactType::Blocked => hbox.add_css_class("contact-type-blocked"),
+        ContactType::Contact => hbox.add_css_class("contact-type-contact"),
+        ContactType::Unknown => hbox.add_css_class("contact-type-unknown"),
+    };
 
     if wide_view {
         hbox.add_css_class("wide-avatar");

@@ -80,6 +80,17 @@ fn add_css() {
             box-shadow: none;
             font-size: 16px;
         }}
+
+        .contact-type-unknown avatar,
+        .contact-type-unknown .vbox {{
+            opacity: 0.6;
+        }}
+
+        .contact-type-blocked avatar,
+        .contact-type-blocked .vbox {{
+            opacity: 0.6;
+            color: #ffb0b0;
+        }}
     "
     ));
 
