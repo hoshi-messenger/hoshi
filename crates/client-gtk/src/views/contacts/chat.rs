@@ -61,13 +61,17 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
         .build();
     emoji_btn.add_css_class("flat");
     {
-        let message_input = message_input.clone();
+        let message_input = message_input.clone().downgrade();
         emoji_chooser.connect_emoji_picked(move |_, emoji| {
-            message_input.buffer().insert_at_cursor(emoji);
-            let message_input = message_input.clone();
-            glib::idle_add_local_once(move || {
-                message_input.grab_focus();
-            });
+            if let Some(message_input) = message_input.upgrade() {
+                message_input.buffer().insert_at_cursor(emoji);
+                let message_input = message_input.clone().downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(message_input) = message_input.upgrade() {
+                        message_input.grab_focus();
+                    }
+                });
+            }
         });
     }
 
@@ -81,15 +85,19 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
 
     let key_controller = gtk::EventControllerKey::new();
     {
-        let send_btn = send_btn.clone();
+        let send_btn = send_btn.clone().downgrade();
         key_controller.connect_key_pressed(move |_, key, _, modifiers| {
-            if key == gtk::gdk::Key::Return
-                && !modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK)
-            {
-                send_btn.emit_clicked();
+            if let Some(send_btn) = send_btn.upgrade() {
+                if key == gtk::gdk::Key::Return
+                    && !modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK)
+                {
+                    send_btn.emit_clicked();
+                    return glib::Propagation::Stop;
+                }
+                glib::Propagation::Proceed
+            } else {
                 return glib::Propagation::Stop;
             }
-            glib::Propagation::Proceed
         });
     }
     message_input.add_controller(key_controller);
@@ -115,11 +123,18 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
         let state = state.clone();
         let moi = state.client.public_key();
         let chat_id = ChatMessage::calc_chat_id(&state.client.public_key(), &contact.public_key);
-        let vbox = vbox.clone();
-        let scroll = scroll.clone();
+        let vbox = vbox.clone().downgrade();
+        let scroll = scroll.clone().downgrade();
         state
             .client
             .messages_watch(chat_id, move |_, _chat_id, messages| {
+                let Some(vbox) = vbox.upgrade() else {
+                    return;
+                };
+                let Some(scroll) = scroll.upgrade() else {
+                    return;
+                };
+
                 let adj = scroll.vadjustment();
                 let at_bottom =
                     adj.upper() <= 0.0 || adj.value() + adj.page_size() >= adj.upper() - 1.0;
@@ -206,10 +221,16 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
     {
         let state = state.clone();
         let contact = contact.clone();
-        let message_input = message_input.clone();
-        let send_btn = send_btn.clone();
-        let scroll = scroll.clone();
+        let message_input = message_input.clone().downgrade();
+        let scroll = scroll.clone().downgrade();
         send_btn.connect_clicked(move |_| {
+            let Some(scroll) = scroll.upgrade() else {
+                return;
+            };
+            let Some(message_input) = message_input.upgrade() else {
+                return;
+            };
+
             let buffer = message_input.buffer();
             let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
             if !text.is_empty() {

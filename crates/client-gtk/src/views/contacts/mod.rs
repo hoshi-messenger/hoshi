@@ -201,12 +201,14 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
 
     {
         let list = list.clone().downgrade();
-        let chat = chat.clone();
+        let chat = chat.clone().downgrade();
         let client = &state.client;
         let state = state.clone();
         client.contacts_watch(move |client, contacts| {
             // More efficient diffing would be nice in the future, good enough for an MVP though
-            if let Some(list) = list.upgrade() {
+            if let Some(list) = list.upgrade()
+                && let Some(chat) = chat.upgrade()
+            {
                 let selected = list.selected_row().map(|r| r.widget_name().to_string());
                 list.remove_all();
 
@@ -248,9 +250,11 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
         });
     }
     list.connect_realize(|list| {
-        let list = list.clone();
+        let list = list.clone().downgrade();
         glib::source::idle_add_local_full(glib::Priority::HIGH, move || {
-            list.unselect_all();
+            if let Some(list) = list.upgrade() {
+                list.unselect_all();
+            }
             glib::ControlFlow::Break
         });
     });
