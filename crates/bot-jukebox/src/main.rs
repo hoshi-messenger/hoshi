@@ -54,7 +54,7 @@ fn main() -> Result<()> {
     loop {
         client.step();
         while let Ok(notification) = notify_rx.try_recv() {
-            let content = format!("Now playing: {}", notification.filename);
+            let content = format!("🎶 {}", notification.filename);
             for recipient in &notification.recipients {
                 let msg = ChatMessage::create(
                     notification.from.clone(),

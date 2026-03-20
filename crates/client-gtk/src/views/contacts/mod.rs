@@ -3,7 +3,7 @@ mod modals;
 
 use adw::{Avatar, NavigationPage, NavigationSplitView, prelude::*};
 use gtk::{Box, Button, Image, Label, ListBox, ListBoxRow, ScrolledWindow};
-use hoshi_clientlib::{CallPartyStatus, Contact, ContactType};
+use hoshi_clientlib::{CallPartyStatus, ChatMessage, Contact, ContactType};
 
 use crate::AppState;
 
@@ -43,13 +43,25 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
         .build();
     alias_label.add_css_class("heading");
 
-    let key_label = Label::builder()
+    let subtitle = if wide_view {
+        contact.public_key.clone()
+    } else {
+        let chat_id = ChatMessage::calc_chat_id(&state.client.public_key(), &contact.public_key);
+        state
+            .client
+            .last_message(&chat_id)
+            .map(|m| m.content)
+            .unwrap_or_default()
+    };
+
+    let subtitle_label = Label::builder()
         .halign(gtk::Align::Start)
-        .label(&contact.public_key)
+        .label(&subtitle)
         .ellipsize(gtk::pango::EllipsizeMode::End)
+        .single_line_mode(true)
         .build();
-    key_label.add_css_class("caption");
-    key_label.add_css_class("dim-label");
+    subtitle_label.add_css_class("caption");
+    subtitle_label.add_css_class("dim-label");
 
     let vbox = Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -58,7 +70,7 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
         .build();
     vbox.add_css_class("vbox");
     vbox.append(&alias_label);
-    vbox.append(&key_label);
+    vbox.append(&subtitle_label);
 
     let hbox = Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -197,41 +209,58 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
         .build();
     list.add_css_class("bg-transparent");
 
-    {
+    let rebuild_list = {
         let list = list.clone().downgrade();
         let chat = chat.clone().downgrade();
-        let client = &state.client;
         let state = state.clone();
-        client.contacts_watch(move |client, contacts| {
-            // More efficient diffing would be nice in the future, good enough for an MVP though
+        std::rc::Rc::new(move || {
             if let Some(list) = list.upgrade()
                 && let Some(chat) = chat.upgrade()
             {
                 let selected = list.selected_row().map(|r| r.widget_name().to_string());
                 list.remove_all();
 
-                let mut sorted_contacts = contacts.values().collect::<Vec<&Contact>>();
-                sorted_contacts.sort_by(|a, b| a.public_key.cmp(&b.public_key));
+                state.client.with_contacts(|client, contacts| {
+                    let mut sorted_contacts = contacts.values().collect::<Vec<&Contact>>();
+                    sorted_contacts.sort_by(|a, b| a.public_key.cmp(&b.public_key));
 
-                for contact in &sorted_contacts {
-                    let row = add_contact_row(state.clone(), &list, contact, false);
-                    if let Some(selected) = &selected {
-                        if &contact.public_key == selected {
-                            row.activate();
+                    for contact in &sorted_contacts {
+                        let row = add_contact_row(state.clone(), &list, contact, false);
+                        if let Some(selected) = &selected {
+                            if &contact.public_key == selected {
+                                row.activate();
+                            }
                         }
                     }
-                }
 
-                if let Some(selected) = &selected {
-                    if client.contact_get(selected).is_none() {
+                    if let Some(selected) = &selected {
+                        if client.contact_get(selected).is_none() {
+                            view_chat_page(state.clone(), chat.clone(), None);
+                            list.unselect_all();
+                        }
+                    } else {
                         view_chat_page(state.clone(), chat.clone(), None);
                         list.unselect_all();
                     }
-                } else {
-                    view_chat_page(state.clone(), chat.clone(), None);
-                    list.unselect_all();
-                }
+                });
             }
+        })
+    };
+
+    {
+        let rebuild_list = rebuild_list.clone();
+        state.client.contacts_watch(move |_, _| {
+            rebuild_list();
+        });
+    }
+
+    {
+        let rebuild_list = rebuild_list.clone();
+        state.client.messages_watch(String::new(), move |_, _, _| {
+            let rebuild_list = rebuild_list.clone();
+            glib::idle_add_local_once(move || {
+                rebuild_list();
+            });
         });
     }
 

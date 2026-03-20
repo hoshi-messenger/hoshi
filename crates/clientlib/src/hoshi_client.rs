@@ -448,6 +448,11 @@ impl HoshiClient {
         }
     }
 
+    pub fn last_message(&self, chat_id: &str) -> Option<ChatMessage> {
+        let messages = self.messages.borrow();
+        messages.get(chat_id)?.values().max().cloned()
+    }
+
     fn messages_changed(&self, chat_id: String) {
         let watchers = self.messages_watchers.borrow();
         for (filter, watcher) in &*watchers {
@@ -747,10 +752,10 @@ impl HoshiClient {
     #[inline]
     pub fn with_contacts<F>(&self, f: F)
     where
-        F: FnOnce(&HashMap<String, Contact>) + 'static,
+        F: FnOnce(&Self, &HashMap<String, Contact>),
     {
         let contacts = self.contacts.borrow();
-        f(&contacts);
+        f(self, &contacts);
     }
 
     /// Use this function so that f gets called whenever a contact changes.
