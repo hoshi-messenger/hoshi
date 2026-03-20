@@ -10,6 +10,7 @@ fn main() -> Result<()> {
     let path = home_dir().unwrap_or("./".into());
     let path = path.join(".hoshi").join("bot-jukebox");
     let client = HoshiClient::new(Some(path))?;
+    client.set_user_alias("Jukebox");
 
     let music_library = home_dir().unwrap_or("./".into());
     let music_library = music_library.join("Music");

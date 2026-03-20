@@ -10,6 +10,7 @@ fn main() -> Result<()> {
     let path = home_dir().unwrap_or("./".into());
     let path = path.join(".hoshi").join("bot-echo");
     let client = HoshiClient::new(Some(path))?;
+    client.set_user_alias("Echo");
     let msg_queue: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(vec![]));
 
     let interface = LoopbackInterface::new();

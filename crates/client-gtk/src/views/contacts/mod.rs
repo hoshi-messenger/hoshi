@@ -23,10 +23,7 @@ fn create_icon_button(icon: &str, label: &str) -> Button {
 }
 
 fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Box {
-    let display_name = state
-        .client
-        .user_alias(&contact.public_key)
-        .unwrap_or_else(|| contact.alias.clone());
+    let display_name = state.client.display_name(&contact.public_key);
 
     let avatar_size = if wide_view { 64 } else { 40 };
 
@@ -74,6 +71,7 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
         ContactType::Blocked => hbox.add_css_class("contact-type-blocked"),
         ContactType::Contact => hbox.add_css_class("contact-type-contact"),
         ContactType::Unknown => hbox.add_css_class("contact-type-unknown"),
+        ContactType::Deleted => {}
     };
 
     if wide_view {

@@ -67,7 +67,7 @@ impl Call {
 
         let mut call_parties: Vec<CallParty> = parties.into_iter().map(|p| p.into()).collect();
         call_parties.push(CallParty {
-            contact: Contact::new(own_key, None),
+            contact: Contact::new(own_key),
             status: CallPartyStatus::Active,
         });
 
@@ -194,7 +194,7 @@ impl Call {
                 party.status = *status;
             } else {
                 self.parties.push(CallParty {
-                    contact: Contact::new(key.to_string(), None),
+                    contact: Contact::new(key.to_string()),
                     status: *status,
                 });
             }
@@ -246,9 +246,9 @@ impl Call {
         let names: Vec<String> = other_parties
             .iter()
             .map(|p| match p.status {
-                CallPartyStatus::Invited => format!("{} (dialing)", p.contact.alias),
-                CallPartyStatus::Ringing => format!("{} (ringing)", p.contact.alias),
-                _ => p.contact.alias.clone(),
+                CallPartyStatus::Invited => format!("{} (dialing)", p.contact.display_name(None)),
+                CallPartyStatus::Ringing => format!("{} (ringing)", p.contact.display_name(None)),
+                _ => p.contact.display_name(None),
             })
             .collect();
 

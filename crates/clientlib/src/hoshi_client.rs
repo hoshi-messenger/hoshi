@@ -228,6 +228,14 @@ impl HoshiClient {
         ));
     }
 
+    fn sync_peer_user(&self, peer_key: &str) {
+        let path = user_path(peer_key);
+        let mut nodes = self.nodes.borrow_mut();
+        let have_local = nodes.get(&path).is_some();
+        drop(nodes);
+        self.node_sync(peer_key, &path, have_local);
+    }
+
     fn rebuild_chat_messages(&self, cp: &str, peer_key: &str) {
         let msgs = {
             let mut nodes = self.nodes.borrow_mut();
@@ -397,11 +405,18 @@ impl HoshiClient {
     }
 
     pub fn own_contact(&self) -> Contact {
-        Contact::new(self.public_key(), None)
+        self.contact_for(&self.public_key())
+    }
+
+    pub fn contact_for(&self, public_key: &str) -> Contact {
+        self.contact_get(public_key)
+            .unwrap_or_else(|| Contact::new(public_key.to_string()))
     }
 
     pub fn set_user_alias(&self, alias: &str) {
-        self.nodes.borrow_mut().user_alias_set(alias);
+        if !self.nodes.borrow_mut().user_alias_set(alias) {
+            return;
+        }
         let contact_keys: Vec<String> = self.contacts.borrow().keys().cloned().collect();
         for key in &contact_keys {
             self.advertise_user(key);
@@ -410,6 +425,11 @@ impl HoshiClient {
 
     pub fn user_alias(&self, public_key: &str) -> Option<String> {
         self.nodes.borrow_mut().user_alias_get(public_key)
+    }
+
+    pub fn display_name(&self, public_key: &str) -> String {
+        self.contact_for(public_key)
+            .display_name(Some(&mut self.nodes.borrow_mut()))
     }
 
     pub fn set_public_key(&self, key: String) -> Result<()> {
@@ -452,11 +472,13 @@ impl HoshiClient {
         for net_msg in self.net.step() {
             match net_msg.payload {
                 HoshiPayload::UpdateCallState { call_id, events } => {
+                    // Auto-create unknown contact for the caller if not known
+                    if self.contact_get(&net_msg.from_key).is_none() {
+                        let contact = Contact::new_unknown(net_msg.from_key.clone());
+                        let _ = self.contact_upsert(contact);
+                    }
                     let mut found = false;
-                    let contact_lookup = |key: &str| -> Contact {
-                        self.contact_get(key)
-                            .unwrap_or_else(|| Contact::new(key.to_string(), None))
-                    };
+                    let contact_lookup = |key: &str| -> Contact { self.contact_for(key) };
                     for call in self.calls.borrow_mut().iter_mut() {
                         if call.id() == &call_id {
                             call.merge_events(events.clone(), &contact_lookup);
@@ -656,6 +678,7 @@ impl HoshiClient {
                 *self.sync_index.borrow_mut() = idx + 1;
                 self.advertise_chat(&contact_keys[idx]);
                 self.advertise_user(&contact_keys[idx]);
+                self.sync_peer_user(&contact_keys[idx]);
             }
         }
 
@@ -762,6 +785,7 @@ impl HoshiClient {
         self.advertise_chat(&contact.public_key);
         if contact.contact_type != crate::ContactType::Blocked {
             self.node_interest_add(&user_path(&contact.public_key));
+            self.sync_peer_user(&contact.public_key);
         } else {
             self.node_interest_remove(&user_path(&contact.public_key));
         }

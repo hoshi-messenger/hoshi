@@ -1,8 +1,6 @@
+use crate::AppState;
 use adw::{ApplicationWindow, prelude::*};
 use gtk::{Box, Entry};
-use hoshi_clientlib::Contact;
-
-use crate::AppState;
 
 pub(super) fn show_add_contact_dialog(
     parent: &ApplicationWindow,
@@ -43,7 +41,7 @@ pub(super) fn show_add_contact_dialog(
         if response == "add" {
             let public_key = public_key_entry.text().to_string();
             if !public_key.is_empty() {
-                let contact = Contact::new(public_key, None);
+                let contact = hoshi_clientlib::Contact::new(public_key);
                 state
                     .client
                     .contact_upsert(contact)
@@ -62,10 +60,7 @@ pub(super) fn show_delete_contact_dialog(
     public_key: &str,
 ) {
     if let Some(contact) = state.client.contact_get(public_key) {
-        let display_name = state
-            .client
-            .user_alias(&contact.public_key)
-            .unwrap_or_else(|| contact.alias.clone());
+        let display_name = state.client.display_name(&contact.public_key);
         let dialog = adw::AlertDialog::new(
             Some("Delete Contact"),
             Some(&format!(

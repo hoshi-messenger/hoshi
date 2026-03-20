@@ -83,15 +83,6 @@ fn edit_and_delete_via_children() {
         &latest.payload,
         HoshiNodePayload::ChatText { content } if content == "edited"
     ));
-
-    store.insert(HoshiNode {
-        from: "alice".into(),
-        path: "/chat/room1/msg1/ccc".into(),
-        payload: HoshiNodePayload::ChatDeleted,
-    });
-    let children = store.children("/chat/room1/msg1");
-    let latest = children.last().unwrap();
-    assert!(matches!(latest.payload, HoshiNodePayload::ChatDeleted));
 }
 
 #[test]

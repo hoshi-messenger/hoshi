@@ -18,15 +18,12 @@ pub struct HoshiNode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum HoshiNodePayload {
     Message,
-    ChatDeleted,
     ChatText { content: String },
     Config { key: String, value: String },
     Contact,
     ContactPublicKey(String),
-    ContactAlias(String),
-    ContactDeleted,
-    ContactType(String),
-    UserAlias(String),
+    ContactType(crate::ContactType),
+    Title(String),
 }
 
 pub struct NodeStore {
@@ -219,30 +216,22 @@ impl NodeStore {
             children.sort_by(|a, b| a.0.cmp(&b.0));
 
             let mut public_key: Option<String> = None;
-            let mut alias: Option<String> = None;
-            let mut contact_type: Option<String> = None;
-            let mut deleted = false;
+            let mut contact_type = crate::ContactType::Contact;
 
             for (_, payload) in &children {
                 match payload {
                     HoshiNodePayload::ContactPublicKey(pk) => public_key = Some(pk.clone()),
-                    HoshiNodePayload::ContactAlias(a) => alias = Some(a.clone()),
-                    HoshiNodePayload::ContactDeleted => deleted = true,
-                    HoshiNodePayload::ContactType(t) => contact_type = Some(t.clone()),
+                    HoshiNodePayload::ContactType(t) => contact_type = t.clone(),
                     _ => {}
                 }
             }
 
-            if deleted {
+            if contact_type == crate::ContactType::Deleted {
                 continue;
             }
             if let Some(pk) = public_key {
-                let mut contact = crate::Contact::new(pk, alias);
-                match contact_type.as_deref() {
-                    Some("unknown") => contact.contact_type = crate::ContactType::Unknown,
-                    Some("blocked") => contact.contact_type = crate::ContactType::Blocked,
-                    _ => {}
-                }
+                let mut contact = crate::Contact::new(pk);
+                contact.contact_type = contact_type;
                 contacts.push(contact);
             }
         }
@@ -253,12 +242,6 @@ impl NodeStore {
         let contact_path = format!("/contact/{}", contact.public_key);
         let pk_uuid = uuid::Uuid::now_v7().to_string();
         let type_uuid = uuid::Uuid::now_v7().to_string();
-
-        let type_str = match contact.contact_type {
-            crate::ContactType::Unknown => "unknown",
-            crate::ContactType::Contact => "contact",
-            crate::ContactType::Blocked => "blocked",
-        };
 
         self.insert(HoshiNode {
             from: String::new(),
@@ -273,18 +256,22 @@ impl NodeStore {
         self.insert(HoshiNode {
             from: String::new(),
             path: format!("{contact_path}/{type_uuid}"),
-            payload: HoshiNodePayload::ContactType(type_str.to_string()),
+            payload: HoshiNodePayload::ContactType(contact.contact_type.clone()),
         });
     }
 
-    pub fn user_alias_set(&mut self, alias: &str) {
+    pub fn user_alias_set(&mut self, alias: &str) -> bool {
+        if self.user_alias_get(&self.public_key.clone()) == Some(alias.to_string()) {
+            return false;
+        }
         let path = user_path(&self.public_key);
         let uuid = uuid::Uuid::now_v7().to_string();
         self.insert(HoshiNode {
             from: self.public_key.clone(),
             path: format!("{path}/{uuid}"),
-            payload: HoshiNodePayload::UserAlias(alias.to_string()),
+            payload: HoshiNodePayload::Title(alias.to_string()),
         });
+        true
     }
 
     pub fn user_alias_get(&mut self, public_key: &str) -> Option<String> {
@@ -298,7 +285,7 @@ impl NodeStore {
         children.sort_by(|a, b| a.0.cmp(&b.0));
         let mut alias = None;
         for (_, payload) in &children {
-            if let HoshiNodePayload::UserAlias(a) = payload {
+            if let HoshiNodePayload::Title(a) = payload {
                 alias = Some(a.clone());
             }
         }
@@ -311,7 +298,7 @@ impl NodeStore {
         self.insert(HoshiNode {
             from: String::new(),
             path: format!("{contact_path}/{del_uuid}"),
-            payload: HoshiNodePayload::ContactDeleted,
+            payload: HoshiNodePayload::ContactType(crate::ContactType::Deleted),
         });
     }
 

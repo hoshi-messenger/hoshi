@@ -118,9 +118,6 @@ impl ChatMessage {
                         ),
                     );
                 }
-                HoshiNodePayload::ChatDeleted => {
-                    // Deleted message — skip
-                }
                 _ => {}
             }
         }

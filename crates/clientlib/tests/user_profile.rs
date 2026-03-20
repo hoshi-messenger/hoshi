@@ -15,6 +15,21 @@ fn user_alias_set_and_get() {
 }
 
 #[test]
+fn user_alias_set_skips_when_unchanged() {
+    let pk = "aa".repeat(32);
+    let mut store = NodeStore::new(None, pk.clone());
+
+    assert!(store.user_alias_set("Alice"));
+    let children_before = store.children(&format!("/user/{pk}")).len();
+
+    // Setting the same alias again should be a no-op
+    assert!(!store.user_alias_set("Alice"));
+    let children_after = store.children(&format!("/user/{pk}")).len();
+
+    assert_eq!(children_before, children_after);
+}
+
+#[test]
 fn user_path_may_read_allows_anyone() {
     let own_pk = "aa".repeat(32);
     let other_pk = "bb".repeat(32);
@@ -34,7 +49,7 @@ fn user_path_may_write_owner_only() {
     let node = HoshiNode {
         from: own_pk.clone(),
         path: format!("/user/{own_pk}/some-uuid"),
-        payload: HoshiNodePayload::UserAlias("Alice".into()),
+        payload: HoshiNodePayload::Title("Alice".into()),
     };
 
     // Owner can write
