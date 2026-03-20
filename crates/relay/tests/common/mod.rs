@@ -2,7 +2,8 @@
 
 use std::{future::Future, path::Path};
 
-use hoshi_relay::{Config, ServerState, create_http_listener, run};
+use hoshi_clientlib::identity::HoshiIdentity;
+use hoshi_relay::{Config, ServerState, create_http_listener, run, tls};
 use tempfile::TempDir;
 
 mod api;
@@ -47,9 +48,13 @@ where
     let (http_listener, http_addr) =
         create_http_listener(config.http_bind_address).expect("create listeners");
     let config = config.update_bound_addresses(http_addr);
-    let state = ServerState::new(config, process_start)
+
+    let identity = HoshiIdentity::generate();
+    let tls_acceptor = tls::create_tls_acceptor(&identity).expect("create TLS acceptor");
+
+    let state = ServerState::new(config, process_start, identity.public_key_hex())
         .await
         .expect("create relay state");
 
-    run(state.clone(), http_listener, test(state)).await;
+    run(state.clone(), http_listener, tls_acceptor, test(state)).await;
 }

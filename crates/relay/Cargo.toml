@@ -24,6 +24,10 @@ toml = { workspace = true }
 hoshi-clientlib = { path = "../clientlib" }
 rmp-serde = { workspace = true }
 futures = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+tokio-rustls = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 sd-notify = { workspace = true }

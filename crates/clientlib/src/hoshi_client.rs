@@ -5,8 +5,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rand_core::{OsRng, RngCore};
-
 use anyhow::{Result, anyhow};
 
 use crate::{
@@ -15,6 +13,7 @@ use crate::{
     call::{CallPartyEvent, CallPartyStatus},
     chat_path,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
+    identity::HoshiIdentity,
     user_path,
 };
 
@@ -47,23 +46,39 @@ pub struct HoshiClient {
 
 impl HoshiClient {
     pub fn new(data_dir: Option<PathBuf>) -> Result<Self> {
-        let net = HoshiNetClient::new();
         let data_dir = data_dir.unwrap_or_else(|| dirs::home_dir().unwrap().join(".hoshi"));
         std::fs::create_dir_all(&data_dir)?;
         let node_store_path = data_dir.join("nodes");
 
         let mut nodes = NodeStore::new(Some(node_store_path), String::new());
-        let public_key = match nodes.config_get("public_key") {
-            Some(key) => key,
+        let identity = match nodes.config_get("ed25519_seed") {
+            Some(seed_hex) => {
+                let seed_bytes: Vec<u8> = (0..seed_hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&seed_hex[i..i + 2], 16).unwrap())
+                    .collect();
+                let seed: [u8; 32] = seed_bytes
+                    .try_into()
+                    .expect("ed25519_seed must be 32 bytes");
+                HoshiIdentity::from_seed(seed)
+            }
             None => {
-                let mut bytes = [0u8; 32];
-                OsRng.fill_bytes(&mut bytes);
-                let key: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-                nodes.config_set("public_key", &key);
-                key
+                let identity = HoshiIdentity::generate();
+                let seed_hex: String = identity
+                    .seed()
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect();
+                nodes.config_set("ed25519_seed", &seed_hex);
+                nodes.config_set("public_key", &identity.public_key_hex());
+                identity
             }
         };
+        let public_key = identity.public_key_hex();
         nodes.set_public_key(public_key.clone());
+
+        let tls_config = identity.make_client_tls_config();
+        let net = HoshiNetClient::new(tls_config);
 
         let loaded_contacts = nodes.contacts();
         let mut contacts = HashMap::new();
@@ -93,7 +108,7 @@ impl HoshiClient {
         }
 
         let relay_list = if cfg!(debug_assertions) {
-            vec!["ws://127.0.0.1:2800/".into()]
+            vec!["wss://127.0.0.1:2800/".into()]
         } else {
             vec!["wss://hoshi.rubhub.net/relay/asuka/".into()]
         };
@@ -102,8 +117,6 @@ impl HoshiClient {
             let relay_list = relay_list.borrow();
             net.update_relays(&relay_list);
         }
-        net.set_public_key(public_key.clone());
-
         Ok(Self {
             net,
             public_key: RefCell::new(public_key.clone()),
@@ -433,7 +446,6 @@ impl HoshiClient {
     }
 
     pub fn set_public_key(&self, key: String) -> Result<()> {
-        self.net.set_public_key(key.clone());
         self.net.disconnect_all();
         self.nodes.borrow_mut().config_set("public_key", &key);
         *self.public_key.borrow_mut() = key;

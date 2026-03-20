@@ -5,6 +5,7 @@ mod chat;
 mod contact;
 mod hoshi_client;
 mod hoshi_net_client;
+pub mod identity;
 mod node;
 mod relay;
 

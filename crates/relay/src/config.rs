@@ -94,7 +94,18 @@ impl Config {
         self
     }
 
+    pub fn config_dir(&self) -> PathBuf {
+        self.config_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    pub fn private_key_path(&self) -> PathBuf {
+        self.config_dir().join("relay.private_key")
+    }
+
     pub fn uri(&self) -> String {
-        format!("http://{}", self.http_bind_address)
+        format!("https://{}", self.http_bind_address)
     }
 }

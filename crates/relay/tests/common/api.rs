@@ -1,3 +1,4 @@
+use hoshi_clientlib::identity::HoshiIdentity;
 use reqwest::Client;
 
 #[derive(Debug, Clone)]
@@ -8,9 +9,15 @@ pub struct RelayApi {
 
 impl RelayApi {
     pub fn new(base_uri: impl Into<String>) -> Self {
+        let identity = HoshiIdentity::generate();
+        let tls_config = identity.make_client_tls_config();
+        let client = Client::builder()
+            .use_preconfigured_tls(tls_config)
+            .build()
+            .expect("failed to build test reqwest client");
         Self {
             base_uri: base_uri.into(),
-            client: Client::new(),
+            client,
         }
     }
 

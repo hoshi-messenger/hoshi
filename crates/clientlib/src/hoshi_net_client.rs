@@ -1,8 +1,9 @@
+use std::{cell::RefCell, sync::mpsc, time::Duration};
+
 use futures::{SinkExt, StreamExt};
 use reqwest::header::USER_AGENT;
 use reqwest_websocket::{Message, RequestBuilderExt};
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, sync::mpsc, time::Duration};
 
 use crate::{RelayInfo, audio_chunk::AudioChunk, call::CallPartyEvent};
 
@@ -10,21 +11,21 @@ pub struct HoshiNetClient {
     relay_list: RefCell<Vec<RelayInfo>>,
     pipes: RefCell<Vec<WebSocketPipe>>,
     outbox: RefCell<Vec<HoshiMessage>>,
-    public_key: RefCell<String>,
+    http_client: reqwest::Client,
 }
 
 impl HoshiNetClient {
-    pub fn new() -> Self {
+    pub fn new(tls_config: rustls::ClientConfig) -> Self {
+        let http_client = reqwest::Client::builder()
+            .use_preconfigured_tls(tls_config)
+            .build()
+            .expect("failed to build reqwest client with TLS config");
         Self {
             relay_list: RefCell::new(vec![]),
             pipes: RefCell::new(vec![]),
             outbox: RefCell::new(vec![]),
-            public_key: RefCell::new(String::new()),
+            http_client,
         }
-    }
-
-    pub fn set_public_key(&self, key: String) {
-        *self.public_key.borrow_mut() = key;
     }
 
     pub fn disconnect_all(&self) {
@@ -47,12 +48,12 @@ impl HoshiNetClient {
         // Open pipes for relays that don't have one yet
         {
             let relay_list = self.relay_list.borrow();
-            let public_key = self.public_key.borrow().clone();
+            let http_client = self.http_client.clone();
             let mut pipes = self.pipes.borrow_mut();
             for relay in relay_list.iter() {
                 let already_connected = pipes.iter().any(|p| p.relay.url == relay.url);
                 if !already_connected {
-                    pipes.push(WebSocketPipe::new(relay.clone(), public_key.clone()));
+                    pipes.push(WebSocketPipe::new(relay.clone(), http_client.clone()));
                 }
             }
         }
@@ -94,7 +95,7 @@ pub struct WebSocketPipe {
 }
 
 impl WebSocketPipe {
-    pub fn new(relay: RelayInfo, public_key: String) -> Self {
+    pub fn new(relay: RelayInfo, client: reqwest::Client) -> Self {
         let (tokio_tx, tokio_rx) = tokio::sync::mpsc::unbounded_channel::<HoshiMessage>();
         let (cli_tx, cli_rx) = mpsc::channel::<HoshiMessage>();
 
@@ -113,9 +114,8 @@ impl WebSocketPipe {
                         let backoff = (connection_attempts * 200).min(10_000);
                         tokio::time::sleep(Duration::from_millis(backoff)).await;
                         connection_attempts += 1;
-                        let ws = match reqwest::Client::default()
+                        let ws = match client
                             .get(&relay.url)
-                            .header("Authorization", format!("Bearer {}", public_key))
                             .header(USER_AGENT, format!("Hoshi Messenger {}", env!("CARGO_PKG_VERSION")))
                             .upgrade()
                             .send()

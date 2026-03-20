@@ -4,6 +4,7 @@ pub(crate) mod connection;
 mod http;
 mod routes;
 mod state;
+pub mod tls;
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -14,6 +15,7 @@ use tokio::{
     net::{TcpListener, TcpSocket},
     runtime::Builder,
 };
+use tokio_rustls::TlsAcceptor;
 
 fn create_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
     let socket = if addr.is_ipv4() {
@@ -65,7 +67,12 @@ fn sd_notify_ready() {
 
 pub(crate) use routes::*;
 
-pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill: T) {
+pub async fn run<T: Future>(
+    state: ServerState,
+    http_listener: TcpListener,
+    tls_acceptor: TlsAcceptor,
+    kill: T,
+) {
     println!(
         "[{:?}] - Hoshi relay started",
         state.process_start.elapsed()
@@ -82,17 +89,17 @@ pub async fn run<T: Future>(state: ServerState, http_listener: TcpListener, kill
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
-    let http_server = http::http_server(state.clone(), http_listener)
+    let https_server = http::https_server(state.clone(), http_listener, tls_acceptor)
         .await
-        .expect("couldn't start relay http server");
+        .expect("couldn't start relay https server");
 
     println!("[{:?}] - Hoshi relay ready", state.process_start.elapsed());
 
     sd_notify_ready();
 
     tokio::select! {
-        http_res = http_server => {
-            eprintln!("HTTP server stopped: {:?}", http_res);
+        http_res = https_server => {
+            eprintln!("HTTPS server stopped: {:?}", http_res);
         }
         signal_res = tokio::signal::ctrl_c() => {
             eprintln!("Received Signal: {:?}", signal_res);
@@ -113,15 +120,22 @@ pub fn run_multi_thread(config: Config, process_start: std::time::Instant) {
         .expect("couldn't start tokio runtime");
 
     runtime.block_on(async {
+        let identity = tls::load_or_generate_identity(&config)
+            .expect("failed to load or generate relay identity");
+        let tls_acceptor =
+            tls::create_tls_acceptor(&identity).expect("failed to create TLS acceptor");
+
+        println!("Relay public key: {}", identity.public_key_hex());
+
         let (http_listener, http_addr) =
             create_http_listener(config.http_bind_address).expect("failed to create listeners");
         let config = config.update_bound_addresses(http_addr);
 
-        let state = ServerState::new(config, process_start)
+        let state = ServerState::new(config, process_start, identity.public_key_hex())
             .await
             .expect("error creating relay state from config");
 
         let kill = std::future::pending::<()>();
-        run(state, http_listener, kill).await;
+        run(state, http_listener, tls_acceptor, kill).await;
     });
 }

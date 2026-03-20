@@ -1,23 +1,24 @@
 use axum::{
     Json,
     extract::{
-        State, WebSocketUpgrade,
+        ConnectInfo, State, WebSocketUpgrade,
         ws::{Message as WsMessage, WebSocket, rejection::WebSocketUpgradeRejection},
     },
     http::{
         HeaderMap, Method, StatusCode,
-        header::{ACCEPT, AUTHORIZATION, USER_AGENT},
+        header::{ACCEPT, USER_AGENT},
     },
     response::{Html, IntoResponse},
 };
 use futures::{SinkExt, StreamExt};
 use hoshi_clientlib::HoshiEnvelope;
 
-use crate::{ServerState, api, connection::HoshiConnection};
+use crate::{ServerState, api, connection::HoshiConnection, http::TlsConnectInfo};
 
 #[axum::debug_handler]
 pub async fn index_route(
     State(state): State<ServerState>,
+    ConnectInfo(conn_info): ConnectInfo<TlsConnectInfo>,
     method: Method,
     headers: HeaderMap,
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
@@ -35,13 +36,11 @@ pub async fn index_route(
                 return StatusCode::UNAUTHORIZED.into_response();
             }
 
-            let client_key = headers
-                .get(AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "))
-                .map(|s| s.to_string());
-
-            let Some(client_key) = client_key else {
+            let Some(client_key) = conn_info.client_public_key else {
+                eprintln!(
+                    "WS: no client certificate presented from {}",
+                    conn_info.remote_addr
+                );
                 return StatusCode::UNAUTHORIZED.into_response();
             };
 
@@ -72,10 +71,10 @@ async fn relay_status_html(_state: ServerState) -> impl IntoResponse {
     Html("<h1>Welcome to the Hoshi relay!</h1>".to_string())
 }
 
-async fn relay_status_json(_state: ServerState) -> impl IntoResponse {
+async fn relay_status_json(state: ServerState) -> impl IntoResponse {
     Json(api::RelayStatusResponse {
         status: "ok".to_string(),
-        public_key: "TEST".to_string(),
+        public_key: state.public_key.clone(),
     })
 }
 
