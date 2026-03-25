@@ -233,7 +233,7 @@ fn persistent_children_survives_new_instance() {
 }
 
 #[test]
-fn persistent_hash_survives_new_instance() {
+fn persistent_hash_recomputed_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
 
@@ -248,8 +248,10 @@ fn persistent_hash_survives_new_instance() {
         h = store.hash("/chat/room1/msg1");
     }
 
+    // Hashes are not persisted, but recomputing should yield the same result
     let mut store = NodeStore::new(Some(root), String::new());
-    assert_eq!(store.get_hash("/chat/room1/msg1"), Some(h));
+    assert_eq!(store.get_hash("/chat/room1/msg1"), None);
+    assert_eq!(store.hash("/chat/room1/msg1"), h);
 }
 
 #[test]

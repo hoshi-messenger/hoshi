@@ -1,11 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 
-use redb::{Database, TableDefinition};
 use serde::{Deserialize, Serialize};
-
-const NODES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("nodes");
-const HASHES_TABLE: TableDefinition<&str, &[u8; 32]> = TableDefinition::new("hashes");
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HoshiNode {
@@ -26,88 +24,218 @@ pub enum HoshiNodePayload {
     Title(String),
 }
 
+/// On-disk record format (includes path, unlike HoshiNode which skips it).
+#[derive(Serialize, Deserialize)]
+struct DiskNode {
+    from: String,
+    path: String,
+    payload: HoshiNodePayload,
+}
+
+pub struct HoshiINode {
+    node: Option<HoshiNode>,
+    hash: Option<blake3::Hash>,
+    pub children: BTreeMap<String, HoshiINode>,
+}
+
+impl HoshiINode {
+    fn new() -> Self {
+        Self {
+            node: None,
+            hash: None,
+            children: BTreeMap::new(),
+        }
+    }
+
+    fn navigate(&self, segments: &[&str]) -> Option<&HoshiINode> {
+        let mut current = self;
+        for seg in segments {
+            current = current.children.get(*seg)?;
+        }
+        Some(current)
+    }
+
+    fn navigate_mut(&mut self, segments: &[&str]) -> &mut HoshiINode {
+        let mut current = self;
+        for seg in segments {
+            current = current
+                .children
+                .entry(seg.to_string())
+                .or_insert_with(HoshiINode::new);
+        }
+        current
+    }
+}
+
+enum FileTarget {
+    Root,
+    Chat(String),
+}
+
+fn target_file(path: &str) -> FileTarget {
+    if let Some(rest) = path.strip_prefix("/chat/") {
+        if let Some(chat_id) = rest.split('/').next() {
+            if !chat_id.is_empty() {
+                return FileTarget::Chat(chat_id.to_string());
+            }
+        }
+    }
+    FileTarget::Root
+}
+
+fn parse_path(path: &str) -> Vec<&str> {
+    path.split('/').filter(|s| !s.is_empty()).collect()
+}
+
+/// Read all records from a `.dat` file, returning HoshiNodes with full paths.
+fn load_file(file_path: &std::path::Path, path_prefix: &str) -> Vec<HoshiNode> {
+    let mut nodes = Vec::new();
+    let data = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(_) => return nodes,
+    };
+    let mut cursor = 0;
+    while cursor + 4 <= data.len() {
+        let len = u32::from_le_bytes([
+            data[cursor],
+            data[cursor + 1],
+            data[cursor + 2],
+            data[cursor + 3],
+        ]) as usize;
+        cursor += 4;
+        if cursor + len > data.len() {
+            break;
+        }
+        if let Ok(disk_node) = rmp_serde::from_slice::<DiskNode>(&data[cursor..cursor + len]) {
+            let full_path = if path_prefix.is_empty() {
+                disk_node.path
+            } else {
+                format!("{path_prefix}{}", disk_node.path)
+            };
+            nodes.push(HoshiNode {
+                from: disk_node.from,
+                path: full_path,
+                payload: disk_node.payload,
+            });
+        }
+        cursor += len;
+    }
+    nodes
+}
+
+/// Append a single record to a `.dat` file.
+fn append_node(file_path: &std::path::Path, disk_node: &DiskNode) {
+    let data = rmp_serde::to_vec(disk_node).expect("failed to serialize node");
+    let len = (data.len() as u32).to_le_bytes();
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file_path)
+        .expect("failed to open dat file");
+    file.write_all(&len).expect("failed to write length");
+    file.write_all(&data).expect("failed to write data");
+}
+
 pub struct NodeStore {
-    nodes: BTreeMap<String, HoshiNode>,
-    hashes: BTreeMap<String, blake3::Hash>,
-    db: Option<Database>,
+    root: HoshiINode,
+    dir: Option<PathBuf>,
+    loaded_chats: HashSet<String>,
     public_key: String,
 }
 
 impl NodeStore {
     pub fn new(root: Option<PathBuf>, public_key: String) -> Self {
-        let db = root.map(|path| {
-            std::fs::create_dir_all(&path).expect("failed to create node store directory");
-            Database::create(path.join("nodes.redb")).expect("failed to open redb database")
+        let dir = root.map(|path| {
+            fs::create_dir_all(&path).expect("failed to create node store directory");
+            path
         });
+
+        let mut tree = HoshiINode::new();
+
+        // Load root.dat at startup
+        if let Some(dir) = &dir {
+            let root_dat = dir.join("root.dat");
+            for node in load_file(&root_dat, "") {
+                let segments = parse_path(&node.path);
+                let inode = tree.navigate_mut(&segments);
+                inode.node = Some(node);
+            }
+        }
+
         Self {
-            nodes: BTreeMap::new(),
-            hashes: BTreeMap::new(),
-            db,
+            root: tree,
+            dir,
+            loaded_chats: HashSet::new(),
             public_key,
         }
     }
 
     pub fn insert(&mut self, node: HoshiNode) {
-        // Collect ancestor paths to invalidate
-        let ancestors: Vec<String> = {
-            let mut result = Vec::new();
-            let mut current = node.path.as_str();
-            while let Some(pos) = current.rfind('/') {
-                current = &node.path[..pos];
-                result.push(current.to_string());
-            }
-            result
-        };
+        let segments = parse_path(&node.path);
 
-        // Single DB transaction for node write + hash invalidation
-        if let Some(db) = &self.db {
-            let data = rmp_serde::to_vec(&node).unwrap_or_default();
-            let write_txn = db.begin_write().unwrap();
-            {
-                let mut nodes_table = write_txn.open_table(NODES_TABLE).unwrap();
-                nodes_table
-                    .insert(node.path.as_str(), data.as_slice())
-                    .unwrap();
+        // Invalidate hashes up the ancestor chain
+        self.root.hash = None;
+        {
+            let mut current = &mut self.root;
+            for seg in &segments {
+                current = current
+                    .children
+                    .entry(seg.to_string())
+                    .or_insert_with(HoshiINode::new);
+                current.hash = None;
             }
-            {
-                let mut hashes_table = write_txn.open_table(HASHES_TABLE).unwrap();
-                let _ = hashes_table.remove(node.path.as_str());
-                for ancestor in &ancestors {
-                    let _ = hashes_table.remove(ancestor.as_str());
+        }
+
+        // Ensure chat file is loaded before appending
+        if let FileTarget::Chat(ref chat_id) = target_file(&node.path) {
+            self.ensure_chat_loaded(chat_id);
+        }
+
+        // Append to disk
+        if let Some(dir) = &self.dir {
+            let (file_path, stored_path) = match target_file(&node.path) {
+                FileTarget::Root => (dir.join("root.dat"), node.path.clone()),
+                FileTarget::Chat(ref chat_id) => {
+                    let prefix = format!("/chat/{chat_id}/");
+                    let stripped = node.path.strip_prefix(&prefix).unwrap_or(&node.path);
+                    (
+                        dir.join(format!("chat.{chat_id}.dat")),
+                        stripped.to_string(),
+                    )
                 }
-            }
-            write_txn.commit().unwrap();
+            };
+            let disk_node = DiskNode {
+                from: node.from.clone(),
+                path: stored_path,
+                payload: node.payload.clone(),
+            };
+            append_node(&file_path, &disk_node);
         }
 
-        // Update in-memory state
-        self.hashes.remove(&node.path);
-        for ancestor in &ancestors {
-            self.hashes.remove(ancestor);
-        }
-        self.nodes.insert(node.path.clone(), node);
+        // Insert into tree
+        let segments = parse_path(&node.path);
+        let inode = self.root.navigate_mut(&segments);
+        inode.node = Some(node);
     }
 
     pub fn get(&mut self, path: &str) -> Option<&HoshiNode> {
-        if !self.nodes.contains_key(path) {
-            if let Some(node) = self.read_node_from_disk(path) {
-                self.nodes.insert(path.to_string(), node);
-            }
-        }
-        self.nodes.get(path)
+        self.ensure_path_loaded(path);
+        let segments = parse_path(path);
+        self.root.navigate(&segments)?.node.as_ref()
     }
 
     /// Returns all direct children of the given path (one level deep).
     pub fn children(&mut self, path: &str) -> Vec<&HoshiNode> {
-        self.load_children_from_disk(path);
-        let prefix = format!("{path}/");
-        let prefix_len = prefix.len();
-        self.nodes
-            .range(prefix..)
-            .take_while(|(k, _)| {
-                k.starts_with(&path) && k.as_bytes().get(path.len()) == Some(&b'/')
-            })
-            .filter(|(k, _)| !k[prefix_len..].contains('/'))
-            .map(|(_, v)| v)
+        self.ensure_path_loaded(path);
+        let segments = parse_path(path);
+        let inode = match self.root.navigate(&segments) {
+            Some(n) => n,
+            None => return vec![],
+        };
+        inode
+            .children
+            .values()
+            .filter_map(|child| child.node.as_ref())
             .collect()
     }
 
@@ -115,61 +243,58 @@ impl NodeStore {
     /// Leaf nodes: hash of their serialized payload.
     /// Nodes with children: hash of concatenated child hashes.
     pub fn hash(&mut self, path: &str) -> blake3::Hash {
-        if let Some(&h) = self.hashes.get(path) {
-            return h;
-        }
-        if let Some(h) = self.read_hash_from_disk(path) {
-            self.hashes.insert(path.to_string(), h);
+        self.ensure_path_loaded(path);
+
+        // Check cached
+        if let Some(h) = self.root.navigate(&parse_path(path)).and_then(|n| n.hash) {
             return h;
         }
 
-        let child_paths: Vec<String> = {
-            self.load_children_from_disk(path);
-            self.child_paths_in_memory(path).map(String::from).collect()
+        let child_keys: Vec<String> = {
+            let segments = parse_path(path);
+            match self.root.navigate(&segments) {
+                Some(inode) => inode.children.keys().cloned().collect(),
+                None => vec![],
+            }
         };
 
-        let h = if child_paths.is_empty() {
+        let h = if child_keys.is_empty() {
             let data = self
-                .nodes
-                .get(path)
-                .or_else(|| {
-                    // Ensure loaded from disk
-                    None
-                })
+                .root
+                .navigate(&parse_path(path))
+                .and_then(|n| n.node.as_ref())
                 .map(|n| rmp_serde::to_vec(n).unwrap_or_default())
                 .unwrap_or_default();
             blake3::hash(&data)
         } else {
             let mut hasher = blake3::Hasher::new();
-            for child_path in child_paths {
+            for key in child_keys {
+                let child_path = format!("{path}/{key}");
                 let child_hash = self.hash(&child_path);
                 hasher.update(child_hash.as_bytes());
             }
             hasher.finalize()
         };
 
-        self.write_hash_to_disk(path, &h);
-        self.hashes.insert(path.to_string(), h);
+        // Cache
+        let segments = parse_path(path);
+        let inode = self.root.navigate_mut(&segments);
+        inode.hash = Some(h);
         h
     }
 
     /// Set a hash for a path directly, for when we know the hash
     /// but don't have the data locally (e.g. from a remote peer during sync).
     pub fn set_hash(&mut self, path: String, hash: blake3::Hash) {
-        self.write_hash_to_disk(&path, &hash);
-        self.hashes.insert(path, hash);
+        let segments = parse_path(&path);
+        let inode = self.root.navigate_mut(&segments);
+        inode.hash = Some(hash);
     }
 
     /// Get a previously computed/set hash without recomputing.
     pub fn get_hash(&mut self, path: &str) -> Option<blake3::Hash> {
-        if let Some(&h) = self.hashes.get(path) {
-            return Some(h);
-        }
-        if let Some(h) = self.read_hash_from_disk(path) {
-            self.hashes.insert(path.to_string(), h);
-            return Some(h);
-        }
-        None
+        let segments = parse_path(path);
+        self.root.navigate(&segments)?.hash
     }
 
     pub fn set_public_key(&mut self, key: String) {
@@ -357,87 +482,27 @@ impl NodeStore {
         other_hex == peer_key
     }
 
-    fn child_paths_in_memory<'a>(&'a self, path: &'a str) -> impl Iterator<Item = &'a str> {
-        let prefix = format!("{path}/");
-        let prefix_len = prefix.len();
-        self.nodes
-            .range(prefix..)
-            .take_while(move |(k, _)| {
-                k.starts_with(&path) && k.as_bytes().get(path.len()) == Some(&b'/')
-            })
-            .filter(move |(k, _)| !k[prefix_len..].contains('/'))
-            .map(|(k, _)| k.as_str())
-    }
-
-    // -- redb helpers --
-
-    fn read_node_from_disk(&self, path: &str) -> Option<HoshiNode> {
-        let db = self.db.as_ref()?;
-        let read_txn = db.begin_read().ok()?;
-        let table = read_txn.open_table(NODES_TABLE).ok()?;
-        let value = table.get(path).ok()??;
-        let mut node: HoshiNode = rmp_serde::from_slice(value.value()).ok()?;
-        node.path = path.to_string();
-        Some(node)
-    }
-
-    fn write_hash_to_disk(&self, path: &str, hash: &blake3::Hash) {
-        if let Some(db) = &self.db {
-            let write_txn = db.begin_write().unwrap();
-            {
-                let mut table = write_txn.open_table(HASHES_TABLE).unwrap();
-                table.insert(path, hash.as_bytes()).unwrap();
-            }
-            write_txn.commit().unwrap();
+    fn ensure_path_loaded(&mut self, path: &str) {
+        if let FileTarget::Chat(chat_id) = target_file(path) {
+            self.ensure_chat_loaded(&chat_id);
         }
     }
 
-    fn read_hash_from_disk(&self, path: &str) -> Option<blake3::Hash> {
-        let db = self.db.as_ref()?;
-        let read_txn = db.begin_read().ok()?;
-        let table = read_txn.open_table(HASHES_TABLE).ok()?;
-        let value = table.get(path).ok()??;
-        Some(blake3::Hash::from(*value.value()))
-    }
-
-    fn load_children_from_disk(&mut self, path: &str) {
-        let db = match &self.db {
-            Some(db) => db,
-            None => return,
-        };
-        let read_txn = match db.begin_read() {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-        let table = match read_txn.open_table(NODES_TABLE) {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-
-        let prefix = format!("{path}/");
-        let prefix_len = prefix.len();
-        let range_end = format!("{path}0"); // '0' is the char after '/'
-
-        let mut to_insert = Vec::new();
-        if let Ok(range) = table.range::<&str>(prefix.as_str()..range_end.as_str()) {
-            for entry in range {
-                let Ok(entry) = entry else { continue };
-                let key = entry.0.value().to_string();
-                if key[prefix_len..].contains('/') {
-                    continue;
-                }
-                if self.nodes.contains_key(&key) {
-                    continue;
-                }
-                let data = entry.1.value().to_vec();
-                if let Ok(mut node) = rmp_serde::from_slice::<HoshiNode>(&data) {
-                    node.path = key.clone();
-                    to_insert.push((key, node));
-                }
-            }
+    fn ensure_chat_loaded(&mut self, chat_id: &str) {
+        if self.loaded_chats.contains(chat_id) {
+            return;
         }
-        for (key, node) in to_insert {
-            self.nodes.insert(key, node);
+        self.loaded_chats.insert(chat_id.to_string());
+
+        if let Some(dir) = &self.dir {
+            let file_path = dir.join(format!("chat.{chat_id}.dat"));
+            let prefix = format!("/chat/{chat_id}/");
+            let nodes = load_file(&file_path, &prefix);
+            for node in nodes {
+                let segments = parse_path(&node.path);
+                let inode = self.root.navigate_mut(&segments);
+                inode.node = Some(node);
+            }
         }
     }
 }

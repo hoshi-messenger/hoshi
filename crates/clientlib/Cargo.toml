@@ -16,7 +16,6 @@ serde = { workspace = true }
 rmp-serde = { workspace = true }
 blake3 = { workspace = true }
 
-redb = { workspace = true }
 ed25519-dalek = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
