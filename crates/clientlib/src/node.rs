@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HoshiNode {
     pub from: String,
-    #[serde(skip)]
     pub path: String,
     pub payload: HoshiNodePayload,
 }
@@ -22,14 +21,6 @@ pub enum HoshiNodePayload {
     ContactPublicKey(String),
     ContactType(crate::ContactType),
     Title(String),
-}
-
-/// On-disk record format (includes path, unlike HoshiNode which skips it).
-#[derive(Serialize, Deserialize)]
-struct DiskNode {
-    from: String,
-    path: String,
-    payload: HoshiNodePayload,
 }
 
 pub struct HoshiINode {
@@ -106,7 +97,7 @@ fn load_file(file_path: &std::path::Path, path_prefix: &str) -> Vec<HoshiNode> {
         if cursor + len > data.len() {
             break;
         }
-        if let Ok(disk_node) = rmp_serde::from_slice::<DiskNode>(&data[cursor..cursor + len]) {
+        if let Ok(disk_node) = rmp_serde::from_slice::<HoshiNode>(&data[cursor..cursor + len]) {
             let full_path = if path_prefix.is_empty() {
                 disk_node.path
             } else {
@@ -124,7 +115,7 @@ fn load_file(file_path: &std::path::Path, path_prefix: &str) -> Vec<HoshiNode> {
 }
 
 /// Append a single record to a `.dat` file.
-fn append_node(file_path: &std::path::Path, disk_node: &DiskNode) {
+fn append_node(file_path: &std::path::Path, disk_node: &HoshiNode) {
     let data = rmp_serde::to_vec(disk_node).expect("failed to serialize node");
     let len = (data.len() as u32).to_le_bytes();
     let mut file = OpenOptions::new()
@@ -204,7 +195,7 @@ impl NodeStore {
                     )
                 }
             };
-            let disk_node = DiskNode {
+            let disk_node = HoshiNode {
                 from: node.from.clone(),
                 path: stored_path,
                 payload: node.payload.clone(),

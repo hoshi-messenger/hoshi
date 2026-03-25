@@ -121,11 +121,11 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAllServerCerts {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        unreachable!("TLS 1.2 is disabled")
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &verify_schemes())
     }
 
     fn verify_tls13_signature(
@@ -161,11 +161,11 @@ impl rustls::server::danger::ClientCertVerifier for RequireClientCert {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        unreachable!("TLS 1.2 is disabled")
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &verify_schemes())
     }
 
     fn verify_tls13_signature(

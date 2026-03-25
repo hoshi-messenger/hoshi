@@ -178,9 +178,7 @@ impl HoshiClient {
             self.net.send(HoshiMessage::new(
                 self.public_key(),
                 peer_key.to_string(),
-                HoshiPayload::NodeList {
-                    path: path.to_string(),
-                },
+                HoshiPayload::NodeList(path.to_string()),
             ));
             // Also advertise our own children so the peer can learn about ours:
             let mut nodes = self.nodes.borrow_mut();
@@ -205,9 +203,7 @@ impl HoshiClient {
             self.net.send(HoshiMessage::new(
                 self.public_key(),
                 peer_key.to_string(),
-                HoshiPayload::NodeRequest {
-                    path: path.to_string(),
-                },
+                HoshiPayload::NodeRequest(path.to_string()),
             ));
         }
     }
@@ -243,9 +239,7 @@ impl HoshiClient {
 
     fn sync_peer_user(&self, peer_key: &str) {
         let path = user_path(peer_key);
-        let mut nodes = self.nodes.borrow_mut();
-        let have_local = nodes.get(&path).is_some();
-        drop(nodes);
+        let have_local = self.nodes.borrow_mut().get(&path).is_some();
         self.node_sync(peer_key, &path, have_local);
     }
 
@@ -275,14 +269,6 @@ impl HoshiClient {
         self.send_call_state(&call);
         self.calls.borrow_mut().push(call);
         self.calls_changed();
-    }
-
-    pub fn active_call_local_voice_activity(&self) -> f32 {
-        0.0
-    }
-
-    pub fn active_call_voice_activity(&self, _public_key: &str) -> f32 {
-        0.0
     }
 
     fn calls_changed(&self) {
@@ -551,6 +537,7 @@ impl HoshiClient {
                     }
                 }
                 HoshiPayload::NodeAdvertise { path, hash } => {
+                    //println!("NodeAdvertise{{path:{}, hash: {:?}}}", &path, &hash);
                     if !self.is_node_interested(&path) {
                         continue;
                     }
@@ -561,48 +548,45 @@ impl HoshiClient {
                     if let Ok(remote_hash) = <[u8; 32]>::try_from(hash.as_slice()) {
                         let remote_hash = blake3::Hash::from(remote_hash);
                         let local_hash = nodes.get_hash(&path);
+                        println!("Remote: {:?}, Local: {:?}", &remote_hash, &local_hash);
                         if local_hash != Some(remote_hash) {
                             drop(nodes);
                             self.node_sync(&net_msg.from_key, &path, local_hash.is_some());
                         }
                     }
                 }
-                HoshiPayload::NodePut {
-                    path,
-                    payload,
-                    hash,
-                } => {
-                    if let Ok(mut node) = rmp_serde::from_slice::<HoshiNode>(&payload) {
-                        node.path = path.clone();
+                HoshiPayload::NodePut(node) => {
+                    //println!("NodePut(path: {})", &node.path);
+                    {
                         let mut nodes = self.nodes.borrow_mut();
-                        if nodes.may_write(&net_msg.from_key, &path, &node) {
-                            nodes.insert(node);
-                            if let Ok(h) = <[u8; 32]>::try_from(hash.as_slice()) {
-                                nodes.set_hash(path.clone(), blake3::Hash::from(h));
-                            }
+                        if nodes.may_write(&net_msg.from_key, &node.path, &node) {
+                            nodes.insert(node.clone());
+                            nodes.hash(&node.path);
+                        } else {
+                            continue;
                         }
-                        drop(nodes);
-                        if path.starts_with("/user/") {
-                            self.contacts_changed();
-                        }
-                        if path.starts_with("/chat/") {
-                            // Extract the chat path (/chat/{xor_hex}) from the full node path
-                            let parts: Vec<&str> = path.splitn(4, '/').collect();
-                            if parts.len() >= 3 {
-                                let cp = format!("/{}/{}", parts[1], parts[2]);
-                                if let Some(peer_key) = self.peer_key_for_chat_path(&cp) {
-                                    // Auto-create unknown contact if peer isn't known
-                                    if self.contact_get(&peer_key).is_none() {
-                                        let contact = Contact::new_unknown(peer_key.clone());
-                                        let _ = self.contact_upsert(contact);
-                                    }
-                                    self.rebuild_chat_messages(&cp, &peer_key);
+                    }
+                    if node.path.starts_with("/user/") {
+                        self.contacts_changed();
+                    }
+                    if node.path.starts_with("/chat/") {
+                        // Extract the chat path (/chat/{xor_hex}) from the full node path
+                        let parts: Vec<&str> = node.path.splitn(4, '/').collect();
+                        if parts.len() >= 3 {
+                            let cp = format!("/{}/{}", parts[1], parts[2]);
+                            if let Some(peer_key) = self.peer_key_for_chat_path(&cp) {
+                                // Auto-create unknown contact if peer isn't known
+                                if self.contact_get(&peer_key).is_none() {
+                                    let contact = Contact::new_unknown(peer_key.clone());
+                                    let _ = self.contact_upsert(contact);
                                 }
+                                self.rebuild_chat_messages(&cp, &peer_key);
                             }
                         }
                     }
                 }
-                HoshiPayload::NodeList { path } => {
+                HoshiPayload::NodeList(path) => {
+                    //println!("NodeList(path: {})", &path);
                     let mut nodes = self.nodes.borrow_mut();
                     if !nodes.may_read(&net_msg.from_key, &path) {
                         continue;
@@ -624,25 +608,19 @@ impl HoshiClient {
                         ));
                     }
                 }
-                HoshiPayload::NodeRequest { path } => {
+                HoshiPayload::NodeRequest(path) => {
+                    //println!("NodeRequest(path: {})", &path);
                     let mut nodes = self.nodes.borrow_mut();
                     if !nodes.may_read(&net_msg.from_key, &path) {
                         continue;
                     }
                     // Send the node itself if it exists
                     if let Some(node) = nodes.get(&path) {
-                        if let Ok(payload) = rmp_serde::to_vec(node) {
-                            let h = nodes.hash(&path);
-                            self.net.send(HoshiMessage::new(
-                                self.public_key(),
-                                net_msg.from_key.clone(),
-                                HoshiPayload::NodePut {
-                                    path: path.clone(),
-                                    payload,
-                                    hash: h.as_bytes().to_vec(),
-                                },
-                            ));
-                        }
+                        self.net.send(HoshiMessage::new(
+                            self.public_key(),
+                            net_msg.from_key.clone(),
+                            HoshiPayload::NodePut(node.clone()),
+                        ));
                     }
                     // Always advertise children, even for virtual parent paths
                     // that have no node themselves (e.g. /chat/{xor})
