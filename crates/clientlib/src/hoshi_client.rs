@@ -182,22 +182,23 @@ impl HoshiClient {
             ));
             // Also advertise our own children so the peer can learn about ours:
             let mut nodes = self.nodes.borrow_mut();
-            let child_paths: Vec<String> = nodes
+
+            let paths: Vec<String> = nodes
                 .children(path)
                 .iter()
                 .map(|n| n.path.clone())
                 .collect();
-            for child_path in child_paths {
-                let h = nodes.hash(&child_path);
-                self.net.send(HoshiMessage::new(
-                    self.public_key(),
-                    peer_key.to_string(),
-                    HoshiPayload::NodeAdvertise {
-                        path: child_path,
-                        hash: h.as_bytes().to_vec(),
-                    },
-                ));
-            }
+
+            let ads = paths
+                .iter()
+                .map(|path| (path.clone(), nodes.hash(&path).as_bytes().to_vec()))
+                .collect();
+
+            self.net.send(HoshiMessage::new(
+                self.public_key(),
+                peer_key.to_string(),
+                HoshiPayload::NodeAdvertise(ads),
+            ));
         } else {
             // We have nothing for this path — request the data directly
             self.net.send(HoshiMessage::new(
@@ -216,10 +217,7 @@ impl HoshiClient {
         self.net.send(HoshiMessage::new(
             self.public_key(),
             peer_key.to_string(),
-            HoshiPayload::NodeAdvertise {
-                path,
-                hash: h.as_bytes().to_vec(),
-            },
+            HoshiPayload::NodeAdvertise(vec![(path, h.as_bytes().to_vec())]),
         ));
     }
 
@@ -230,10 +228,7 @@ impl HoshiClient {
         self.net.send(HoshiMessage::new(
             self.public_key(),
             peer_key.to_string(),
-            HoshiPayload::NodeAdvertise {
-                path,
-                hash: h.as_bytes().to_vec(),
-            },
+            HoshiPayload::NodeAdvertise(vec![(path, h.as_bytes().to_vec())]),
         ));
     }
 
@@ -536,22 +531,28 @@ impl HoshiClient {
                         }
                     }
                 }
-                HoshiPayload::NodeAdvertise { path, hash } => {
-                    //println!("NodeAdvertise{{path:{}, hash: {:?}}}", &path, &hash);
-                    if !self.is_node_interested(&path) {
-                        continue;
-                    }
-                    let mut nodes = self.nodes.borrow_mut();
-                    if !nodes.may_read(&net_msg.from_key, &path) {
-                        continue;
-                    }
-                    if let Ok(remote_hash) = <[u8; 32]>::try_from(hash.as_slice()) {
-                        let remote_hash = blake3::Hash::from(remote_hash);
-                        let local_hash = nodes.get_hash(&path);
-                        println!("Remote: {:?}, Local: {:?}", &remote_hash, &local_hash);
-                        if local_hash != Some(remote_hash) {
-                            drop(nodes);
-                            self.node_sync(&net_msg.from_key, &path, local_hash.is_some());
+                HoshiPayload::NodeAdvertise(children) => {
+                    for (path, hash) in children {
+                        //println!("NodeAdvertise{{path:{}, hash: {:?}}}", &path, &hash);
+                        if !self.is_node_interested(&path) {
+                            continue;
+                        }
+                        let mut nodes = self.nodes.borrow_mut();
+                        if !nodes.may_read(&net_msg.from_key, &path) {
+                            continue;
+                        }
+                        if let Ok(remote_hash) = <[u8; 32]>::try_from(hash.as_slice()) {
+                            let remote_hash = blake3::Hash::from(remote_hash);
+                            let local_hash = nodes.get_hash(&path);
+                            if local_hash != Some(remote_hash) {
+                                println!(
+                                    "Path: {}, Remote: {:?}, Local: {:?}",
+                                    &path, &remote_hash, &local_hash
+                                );
+
+                                drop(nodes);
+                                self.node_sync(&net_msg.from_key, &path, local_hash.is_some());
+                            }
                         }
                     }
                 }
@@ -591,22 +592,23 @@ impl HoshiClient {
                     if !nodes.may_read(&net_msg.from_key, &path) {
                         continue;
                     }
-                    let children: Vec<String> = nodes
+
+                    let paths: Vec<String> = nodes
                         .children(&path)
                         .iter()
-                        .map(|n| n.path.clone())
+                        .map(|node| node.path.clone())
                         .collect();
-                    for child_path in children {
-                        let h = nodes.hash(&child_path);
-                        self.net.send(HoshiMessage::new(
-                            self.public_key(),
-                            net_msg.from_key.clone(),
-                            HoshiPayload::NodeAdvertise {
-                                path: child_path,
-                                hash: h.as_bytes().to_vec(),
-                            },
-                        ));
-                    }
+
+                    let ads = paths
+                        .iter()
+                        .map(|path| (path.clone(), nodes.hash(&path).as_bytes().to_vec()))
+                        .collect();
+
+                    self.net.send(HoshiMessage::new(
+                        self.public_key(),
+                        net_msg.from_key.clone(),
+                        HoshiPayload::NodeAdvertise(ads),
+                    ));
                 }
                 HoshiPayload::NodeRequest(path) => {
                     //println!("NodeRequest(path: {})", &path);
@@ -624,22 +626,22 @@ impl HoshiClient {
                     }
                     // Always advertise children, even for virtual parent paths
                     // that have no node themselves (e.g. /chat/{xor})
-                    let child_paths: Vec<String> = nodes
+                    let paths: Vec<String> = nodes
                         .children(&path)
                         .iter()
-                        .map(|n| n.path.clone())
+                        .map(|node| node.path.clone())
                         .collect();
-                    for child_path in child_paths {
-                        let h = nodes.hash(&child_path);
-                        self.net.send(HoshiMessage::new(
-                            self.public_key(),
-                            net_msg.from_key.clone(),
-                            HoshiPayload::NodeAdvertise {
-                                path: child_path,
-                                hash: h.as_bytes().to_vec(),
-                            },
-                        ));
-                    }
+
+                    let ads = paths
+                        .iter()
+                        .map(|path| (path.clone(), nodes.hash(&path).as_bytes().to_vec()))
+                        .collect();
+
+                    self.net.send(HoshiMessage::new(
+                        self.public_key(),
+                        net_msg.from_key.clone(),
+                        HoshiPayload::NodeAdvertise(ads),
+                    ));
                 }
                 _ => {}
             }

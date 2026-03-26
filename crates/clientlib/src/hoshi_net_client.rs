@@ -246,10 +246,7 @@ pub enum HoshiPayload {
         chunk: AudioChunk,
     },
 
-    NodeAdvertise {
-        path: String,
-        hash: Vec<u8>,
-    },
+    NodeAdvertise(Vec<(String, Vec<u8>)>),
     NodePut(HoshiNode),
     NodeList(String),
     NodeRequest(String),
