@@ -543,15 +543,15 @@ impl HoshiClient {
                         }
                         if let Ok(remote_hash) = <[u8; 32]>::try_from(hash.as_slice()) {
                             let remote_hash = blake3::Hash::from(remote_hash);
-                            let local_hash = nodes.get_hash(&path);
+                            let has_local_data = nodes.exists(&path);
+                            let local_hash = if has_local_data {
+                                Some(nodes.hash(&path))
+                            } else {
+                                None
+                            };
                             if local_hash != Some(remote_hash) {
-                                println!(
-                                    "Path: {}, Remote: {:?}, Local: {:?}",
-                                    &path, &remote_hash, &local_hash
-                                );
-
                                 drop(nodes);
-                                self.node_sync(&net_msg.from_key, &path, local_hash.is_some());
+                                self.node_sync(&net_msg.from_key, &path, has_local_data);
                             }
                         }
                     }

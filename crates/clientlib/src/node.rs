@@ -288,6 +288,16 @@ impl NodeStore {
         self.root.navigate(&segments)?.hash
     }
 
+    /// Check whether a path has a node or children (without computing hashes).
+    pub fn exists(&mut self, path: &str) -> bool {
+        self.ensure_path_loaded(path);
+        let segments = parse_path(path);
+        match self.root.navigate(&segments) {
+            Some(inode) => inode.node.is_some() || !inode.children.is_empty(),
+            None => false,
+        }
+    }
+
     pub fn set_public_key(&mut self, key: String) {
         self.public_key = key;
     }
@@ -489,6 +499,20 @@ impl NodeStore {
             let file_path = dir.join(format!("chat.{chat_id}.dat"));
             let prefix = format!("/chat/{chat_id}/");
             let nodes = load_file(&file_path, &prefix);
+            if !nodes.is_empty() {
+                // Invalidate ancestor hashes since we're adding children
+                self.root.hash = None;
+                let chat_path = format!("/chat/{chat_id}");
+                let chat_segments = parse_path(&chat_path);
+                let mut current = &mut self.root;
+                for seg in &chat_segments {
+                    current = current
+                        .children
+                        .entry(seg.to_string())
+                        .or_insert_with(HoshiINode::new);
+                    current.hash = None;
+                }
+            }
             for node in nodes {
                 let segments = parse_path(&node.path);
                 let inode = self.root.navigate_mut(&segments);
