@@ -44,7 +44,7 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
     alias_label.add_css_class("heading");
 
     let subtitle = if wide_view {
-        contact.public_key.clone()
+        String::new()
     } else {
         let chat_id = ChatMessage::calc_chat_id(&state.client.public_key(), &contact.public_key);
         state
@@ -88,6 +88,21 @@ fn create_contact_box(state: AppState, contact: &Contact, wide_view: bool) -> Bo
 
     if wide_view {
         hbox.add_css_class("wide-avatar");
+
+        let copy_key_button = create_icon_button("edit-copy-symbolic", "Copy Key");
+        copy_key_button.add_css_class("flat");
+        {
+            let public_key = contact.public_key.clone();
+            copy_key_button.connect_clicked(move |button| {
+                button.clipboard().set_text(&public_key);
+                let button_box = button.child().and_downcast::<Box>().unwrap();
+                let icon = button_box.first_child().and_downcast::<Image>().unwrap();
+                let label = icon.next_sibling().and_downcast::<Label>().unwrap();
+                icon.set_icon_name(Some("emblem-ok-symbolic"));
+                label.set_label("Copied!");
+            });
+        }
+        hbox.append(&copy_key_button);
 
         let call_button = create_icon_button("call-start-symbolic", "Call");
         call_button.add_css_class("flat");
