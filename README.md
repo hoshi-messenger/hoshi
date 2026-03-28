@@ -4,13 +4,12 @@ Monorepo of the Hoshi network/messenger. Still in early development so it's not 
 
 ## ToDo / Next Steps
 
-- [ ] Use snow for actual crypto
+- [ ] Use snow for actual crypto / E2EE
 - [ ] Spaces / Group Chats
 
 ## Backlog
 
 - [ ] SpaceDirectory bot
-- [ ] Show last message instead of public key, in the chat view show status 
 - [ ] Voice channels in spaces
 - [ ] Rooms in spaces
 - [ ] Add some clientlib unit tests
@@ -39,6 +38,7 @@ Those are more complicated non-essential tasks, will probably take a while until
 
 ## Completed
 
+- [X] Show last message instead of public key, in the chat view show status 
 - [X] Add arrows to chat bubbles
 - [X] Notify and sync instead of sending messages directly, on startup notify all contacts
 - [X] Audio calls, start with a Ring message, the other party may then send back an Accept/Reject message directly, once the call is open just spam the other side with regular G711 u-Law sample data and output it with rodio or something like that
