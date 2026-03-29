@@ -30,6 +30,26 @@ the native GTK dependencies
 sudo pacman -S libadwaita gtk4 base-devel
 ```
 
+### Fedora
+
+You can install all the required dependencies using the following command:
+
+```bash
+sudo dnf install -y git rustup clang pkg-config \
+  gtk4-devel libadwaita-devel \
+  libX11-devel libxcb-devel libxkbcommon-devel libXcursor-devel \
+  libXi-devel libXrandr-devel libXinerama-devel libXxf86vm-devel \
+  mesa-libGL-devel mesa-libEGL-devel \
+  vulkan-headers vulkan-loader-devel \
+  alsa-lib-devel fontconfig-devel
+```
+
+Now you can ensure a stable Rust toolchain via:
+
+```bash
+rustup default stable
+```
+
 ## Development
 
 ### Relay
