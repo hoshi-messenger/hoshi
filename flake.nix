@@ -16,7 +16,6 @@
           let
             pkgs = nixpkgs.legacyPackages.${system};
             runtimeLibs = with pkgs; [
-              # GTK4 / Adwaita
               gtk4
               libadwaita
 
@@ -29,14 +28,12 @@
               libxinerama
               libxxf86vm
 
-              # OpenGL loader / drivers
               mesa
               libglvnd
-              glslang # or shaderc
+              glslang
               vulkan-headers
               vulkan-loader
 
-              # Audio/fonts often needed by frameworks
               alsa-lib
               fontconfig
             ];
@@ -57,10 +54,6 @@
 
                   mold
                   clang
-
-                  nodejs_24
-                  typescript-language-server
-                  biome
 
                   tokei
                 ];

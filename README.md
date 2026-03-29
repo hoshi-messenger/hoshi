@@ -1,8 +1,95 @@
 # Hoshi
 
-Monorepo of the Hoshi network/messenger. Still in early development so it's not usable as a messenger just yet.
+Monorepo of the Hoshi messenger.
+
+Still in early development so I'm not running a production server just yet.
 
 ![Have a screenshot](./docs/screenshot.webp)
+
+## Development prerequisites
+
+Right now every part of Hoshi is written in Rust, so you need a recent toolchain
+which you can install via `rustup` for example. Additionally the client is built
+with `gtk-rs` and `libadwaita` so you need those native dependencies installed.
+
+### NixOS
+
+On NixOS you can just use the included development flake, or enable direnv which
+automatically switches to a dev shell.
+
+```bash
+nix develop
+```
+
+### Arch Linux
+
+On Arch I'd recommend using `rustup` to install a stable toolchain and then installing
+the native GTK dependencies
+
+```bash
+sudo pacman -S libadwaita gtk4 base-devel
+```
+
+## Development
+
+### Relay
+
+To do development you must ensure that a relay is running on your machine so
+that clients/bots can connect to it (debug builds try to connect to a relay
+at `wss://127.0.0.1:2800/`). So for example start one terminal, `cd` to the
+repo and then run:
+
+```bash
+cargo run --bin hoshi-relay
+```
+
+### Client
+
+To start the GTK4 client run the following:
+
+```bash
+cargo run --bin hoshi-client-gtk
+```
+
+### Echo Bot
+
+Now if you want to test voice calls you can use the Echo bot, when you send
+it text messages it just sends you the same message back, additionally you can
+call it and it picks up the phone and plays it back to you (I highly recommend
+headphones for this, there's no echo cancellation yet!):
+
+```bash
+cargo run --bin hoshi-bot-echo
+```
+
+### Jukebox Bot
+
+In order to communicate with one of those bots you need to add them as a contact
+in your client, just press the `New Contact` button in the bottom left and
+paste the public key of the bot (it'll print a key onto stdout on startup).
+
+Another bot you might give a try is the Jukebox Bot, whenever you call it it
+randomly accepts the call and plays back an mp3/m4a from `~/Music/`, mainly
+helps to test audio quality and stutter free playback during various operations.
+
+```bash
+cargo run --bin hoshi-bot-jukebox
+```
+
+### Second client
+
+Additionally you can try running a second client on your dev machine, for this
+to work properly you need to start the second client with another profile, to
+do so you run the following command:
+
+```bash
+cargo run --bin hoshi-client-gtk -- --data-dir ~/.hoshi2/
+```
+
+Release builds point to a Hetzner VM of mine, but right now I don't have the
+Relay running regularly yet, as soon as I get around to getting the control
+plane working I'll make sure to keep it running so that testing becomes easier.
+
 
 ## ToDo / Next Steps
 
@@ -55,4 +142,4 @@ Those are more complicated non-essential tasks, will probably take a while until
 
 ## License
 
-Unless otherwise stated all source code in this repository is under the MPL 2.0 license, see /LICENSE
+Unless otherwise stated all source code in this repository is under the MPL 2.0 license, see `/LICENSE`
