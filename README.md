@@ -2,8 +2,12 @@
 
 Monorepo of the Hoshi network/messenger. Still in early development so it's not usable as a messenger just yet.
 
+![Have a screenshot](./docs/screenshot.webp)
+
 ## ToDo / Next Steps
 
+- [ ] Allow control plane to sign relay / client certs
+- [ ] Check whether relay / client cert was signed by control plane
 - [ ] Use snow for actual crypto / E2EE
 - [ ] Spaces / Group Chats
 
@@ -12,6 +16,7 @@ Monorepo of the Hoshi network/messenger. Still in early development so it's not 
 - [ ] SpaceDirectory bot
 - [ ] Voice channels in spaces
 - [ ] Rooms in spaces
+- [ ] Shard message type
 - [ ] Add some clientlib unit tests
 - [ ] Add some relay unit tests
 - [ ] Add integration tests between clientlib <-> relay
