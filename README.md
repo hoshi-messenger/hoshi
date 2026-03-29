@@ -110,6 +110,10 @@ Release builds point to a Hetzner VM of mine, but right now I don't have the
 Relay running regularly yet, as soon as I get around to getting the control
 plane working I'll make sure to keep it running so that testing becomes easier.
 
+## Community
+
+Until Hoshi becomes self-hosting there is a [Discord channel](https://discord.gg/GSzAyF9NSA) you can join.
+
 
 ## ToDo / Next Steps
 
