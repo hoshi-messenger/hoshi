@@ -87,13 +87,16 @@ impl HoshiClient {
         }
         let contacts = RefCell::new(contacts);
         let contacts_watchers = RefCell::new(vec![]);
+
+        let mut messages: HashMap<String, HashMap<String, ChatMessage>> = HashMap::new();
         let messages_watchers = RefCell::new(vec![]);
-        let incoming_calls = RefCell::new(vec![]);
-        let incoming_call_watchers = RefCell::new(vec![]);
+
+        let calls = RefCell::new(vec![]);
+        let calls_watchers = RefCell::new(vec![]);
 
         // Register node interests and load messages for all existing chats
         let mut node_interests = HashSet::new();
-        let mut messages_map: HashMap<String, HashMap<String, ChatMessage>> = HashMap::new();
+
         for contact in contacts.borrow().values() {
             let cp = chat_path(&public_key, &contact.public_key);
             node_interests.insert(cp.clone());
@@ -103,33 +106,30 @@ impl HoshiClient {
             let msgs =
                 ChatMessage::messages_from_nodes(&mut nodes, &cp, &public_key, &contact.public_key);
             if !msgs.is_empty() {
-                messages_map.insert(cp, msgs);
+                messages.insert(cp, msgs);
             }
         }
 
         let relay_list = if cfg!(debug_assertions) {
             vec!["wss://127.0.0.1:2800/".into()]
         } else {
-            vec!["wss://hoshi.rubhub.net/relay/asuka/".into()]
+            vec!["wss://hoshi.rubhub.net:2800/".into()]
         };
         let relay_list = RefCell::new(relay_list);
-        {
-            let relay_list = relay_list.borrow();
-            net.update_relays(&relay_list);
-        }
+        net.update_relays(&relay_list.borrow());
         Ok(Self {
             net,
             public_key: RefCell::new(public_key.clone()),
 
             audio_interface: RefCell::new(None),
 
-            calls: incoming_calls,
-            calls_watchers: incoming_call_watchers,
+            calls,
+            calls_watchers,
 
             contacts,
             contacts_watchers,
 
-            messages: RefCell::new(messages_map),
+            messages: RefCell::new(messages),
             messages_watchers,
 
             nodes: RefCell::new(nodes),
@@ -144,11 +144,11 @@ impl HoshiClient {
         *self.audio_interface.borrow_mut() = interface;
     }
 
-    pub fn node_interest_add(&self, path: &str) {
+    fn node_interest_add(&self, path: &str) {
         self.node_interests.borrow_mut().insert(path.to_string());
     }
 
-    pub fn node_interest_remove(&self, path: &str) {
+    fn node_interest_remove(&self, path: &str) {
         self.node_interests.borrow_mut().remove(path);
     }
 
@@ -281,11 +281,6 @@ impl HoshiClient {
         self.calls_watchers.borrow_mut().push(Box::new(f));
     }
 
-    pub fn calls_push(&self, call: Call) {
-        self.calls.borrow_mut().push(call);
-        self.calls_changed();
-    }
-
     pub fn call_get(&self, call_id: &str) -> Option<Call> {
         for call in self.calls.borrow().iter() {
             if call.id() == call_id {
@@ -402,7 +397,7 @@ impl HoshiClient {
         self.contact_for(&self.public_key())
     }
 
-    pub fn contact_for(&self, public_key: &str) -> Contact {
+    fn contact_for(&self, public_key: &str) -> Contact {
         self.contact_get(public_key)
             .unwrap_or_else(|| Contact::new(public_key.to_string()))
     }
