@@ -8,6 +8,7 @@ mod hoshi_net_client;
 pub mod identity;
 mod node;
 mod relay;
+mod store;
 
 pub use audio_chunk::AudioChunk;
 pub use audio_interface::{
