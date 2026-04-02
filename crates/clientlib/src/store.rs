@@ -2,16 +2,14 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs::File,
     io::BufWriter,
-    ops::Bound::{Excluded, Unbounded},
     path::PathBuf,
 };
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub trait Store: serde::Serialize {
+pub trait Store: serde::Serialize + std::fmt::Debug {
     fn msg_id(&self) -> Uuid;
-    fn msg_from(&self) -> String;
     fn msg_hash(&self) -> blake3::Hash;
 }
 
@@ -29,6 +27,7 @@ pub enum HeadCommand<T: Store> {
     Put(Vec<T>),
 }
 
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct RepoCommand<T: Store> {
     pub head: String,
     pub commands: Vec<HeadCommand<T>>,
@@ -36,7 +35,17 @@ pub struct RepoCommand<T: Store> {
 
 impl<T: Store> StoreHead<T> {
     pub fn new(name: String, repo_path: Option<PathBuf>) -> Self {
-        let file = None;
+        let file = repo_path.map(|p| {
+            let p = p.join(format!("{name}.hoshi"));
+            BufWriter::new(
+                File::options()
+                    .append(true)
+                    .create(true)
+                    .open(p)
+                    .expect("Couldn't open StoreHead file"),
+            )
+        });
+
         Self {
             name,
             file,
@@ -45,24 +54,46 @@ impl<T: Store> StoreHead<T> {
         }
     }
 
+    pub fn get(&self, uuid: Uuid) -> Option<&T> {
+        self.messages.get(&uuid)
+    }
+
+    pub fn len(&self) -> usize {
+        self.messages.len()
+    }
+
+    fn hash_start(&self) -> blake3::Hash {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(self.name.as_bytes());
+        hasher.finalize()
+    }
+
+    pub fn hash_tip(&mut self) -> blake3::Hash {
+        if let Some(last) = self.messages.last_entry() {
+            let uuid = *last.key();
+            self.hash(uuid).expect("Last entry couldn't be hashed")
+        } else {
+            self.hash_start()
+        }
+    }
+
     pub fn hash(&mut self, uuid: Uuid) -> Option<blake3::Hash> {
         if let Some(hash) = self.hashes.get(&uuid) {
             return Some(*hash);
         }
-        let mut range = self.messages.range(..uuid);
-        let Some(cur) = range.next_back() else {
+        let mut range = self.messages.range(uuid..);
+        let Some(cur) = range.next() else {
             return None;
         };
         let cur = cur.1.msg_hash();
-        let Some(prev) = range.next_back() else {
-            self.hashes.insert(uuid, cur);
-            return Some(cur);
-        };
-        let Some(prev) = self.hash(*prev.0) else {
-            panic!(
-                "Could get msg but couldn't hash it, this should never happen: {}:{}",
-                self.name, uuid,
-            )
+
+        let prev = match range.next_back() {
+            None => self.hash_start(),
+            Some((id, _)) => {
+                let id = *id;
+                self.hash(id)
+                    .expect("Couldn't hash entry that was in StoreHead")
+            }
         };
         let mut hasher = blake3::Hasher::new();
         hasher.update(prev.as_bytes());
@@ -88,17 +119,6 @@ impl<T: Store> StoreHead<T> {
         self.messages.insert(uuid, msg);
         // invalidate cached hashes for uuid and everything after
         self.hashes.retain(|id, _| id < &uuid);
-
-        let mut hash = self
-            .hash(uuid)
-            .expect("Just inserted msg should have a hash");
-        for (id, msg) in self.messages.range((Excluded(uuid), Unbounded)) {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(hash.as_bytes());
-            hasher.update(msg.msg_hash().as_bytes());
-            hash = hasher.finalize();
-            self.hashes.insert(*id, hash);
-        }
     }
 
     pub fn exec(&mut self, cmd: HeadCommand<T>) {
