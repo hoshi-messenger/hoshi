@@ -1,14 +1,15 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fs::File,
-    io::BufWriter,
-    path::PathBuf,
+    io::{BufWriter, Write},
+    path::{Path, PathBuf},
 };
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub trait Store: serde::Serialize + std::fmt::Debug {
+pub trait Store: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug {
     fn msg_id(&self) -> Uuid;
     fn msg_hash(&self) -> blake3::Hash;
 }
@@ -21,6 +22,7 @@ pub struct StoreHead<T: Store> {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(bound = "T: Store")]
 pub enum HeadCommand<T: Store> {
     Has(Vec<(Uuid, [u8; 32])>),
     Get(Vec<Uuid>),
@@ -28,14 +30,15 @@ pub enum HeadCommand<T: Store> {
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(bound = "T: Store")]
 pub struct RepoCommand<T: Store> {
     pub head: String,
     pub commands: Vec<HeadCommand<T>>,
 }
 
 impl<T: Store> StoreHead<T> {
-    pub fn new(name: String, repo_path: Option<PathBuf>) -> Self {
-        let file = repo_path.map(|p| {
+    pub fn new(name: String, repo_path: Option<&Path>) -> Self {
+        let file = repo_path.clone().map(|p| {
             let p = p.join(format!("{name}.hoshi"));
             BufWriter::new(
                 File::options()
@@ -45,12 +48,18 @@ impl<T: Store> StoreHead<T> {
                     .expect("Couldn't open StoreHead file"),
             )
         });
+        let messages = repo_path
+            .map(|p| {
+                let p = p.join(format!("{name}.hoshi"));
+                Self::load_messages(p).expect("Couldn't load local StoreHead")
+            })
+            .unwrap_or_default();
 
         Self {
             name,
             file,
             hashes: HashMap::new(),
-            messages: BTreeMap::new(),
+            messages,
         }
     }
 
@@ -66,6 +75,22 @@ impl<T: Store> StoreHead<T> {
         let mut hasher = blake3::Hasher::new();
         hasher.update(self.name.as_bytes());
         hasher.finalize()
+    }
+
+    fn load_messages(path: PathBuf) -> Result<BTreeMap<Uuid, T>> {
+        let mut map = BTreeMap::new();
+        let data = std::fs::read(path)?;
+        let mut i = 0;
+        while i + 4 < data.len() {
+            let len = &data[i..i + 4].try_into()?;
+            let len = u32::from_le_bytes(*len) as usize;
+            i = i + 4;
+            let msg = &data[i..i + len];
+            let msg = rmp_serde::from_slice::<T>(msg)?;
+            map.insert(msg.msg_id(), msg);
+            i = i + len;
+        }
+        Ok(map)
     }
 
     pub fn hash_tip(&mut self) -> blake3::Hash {
@@ -111,9 +136,20 @@ impl<T: Store> StoreHead<T> {
             }
             return;
         }
-        if let Some(mut file) = self.file.as_mut() {
-            if let Err(err) = rmp_serde::encode::write(&mut file, &msg) {
-                eprintln!("Error writing to store {}: {:?}", self.name, err);
+        if let Some(file) = self.file.as_mut() {
+            match rmp_serde::encode::to_vec(&msg) {
+                Ok(encoded) => {
+                    let len = (encoded.len() as u32).to_le_bytes();
+                    file.write_all(&len).expect("Couldn't write len");
+                    file.write_all(encoded.as_slice())
+                        .expect("Couldn't write msgpack");
+                }
+                Err(err) => {
+                    eprintln!(
+                        "Error enconding msg for store {}: {:?} - Msg: {:?}",
+                        self.name, err, msg,
+                    );
+                }
             }
         }
         self.messages.insert(uuid, msg);

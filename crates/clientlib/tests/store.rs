@@ -1,6 +1,7 @@
 use blake3::Hash;
 use hoshi_clientlib::{Store, StoreHead};
 use serde::{Deserialize, Serialize};
+use tempfile::tempdir;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +32,7 @@ impl Dummy {
 }
 
 #[test]
-fn basic_head_memory_tests() {
+fn basic_head_tests() {
     let mut head_a = StoreHead::<Dummy>::new("a".to_string(), None);
     let mut head_a2 = StoreHead::<Dummy>::new("a".to_string(), None);
     let mut head_b = StoreHead::<Dummy>::new("b".to_string(), None);
@@ -47,13 +48,18 @@ fn basic_head_memory_tests() {
     assert_eq!(head_a.hash_tip(), head_a2.hash_tip());
     assert_ne!(head_a.hash_tip(), head_b.hash_tip());
 
-    // First make sure that an insert triggers a new hash
+    // Now make sure that an insert triggers a new hash
     head_a.insert(msg_2.clone());
     assert_eq!(head_a.len(), 1);
     assert_ne!(head_a.hash_tip(), head_a2.hash_tip());
     head_a2.insert(msg_2.clone());
     // Same name and same content should result in same hash
     assert_eq!(head_a.hash_tip(), head_a2.hash_tip());
+    // Inserting the same message twice shouldn't change the hash/count
+    head_a.insert(msg_2.clone());
+    assert_eq!(head_a.hash_tip(), head_a2.hash_tip());
+    assert_eq!(head_a.len(), 1);
+
     head_b.insert(msg_2.clone());
     // Different name should trigger a different hash, even if messages are the same
     assert_ne!(head_a.hash_tip(), head_b.hash_tip());
@@ -70,10 +76,16 @@ fn basic_head_memory_tests() {
     head_a.insert(msg_1.clone());
     let new_hash_a = head_a.hash(msg_2.id).unwrap();
     assert_ne!(old_hash_a, new_hash_a);
+}
 
+#[test]
+fn head_insertion_order_mustnt_matter() {
     // Insertion order shouldn't matter for the final hash, same messages, same hashes
     let mut head_a = StoreHead::<Dummy>::new("a".to_string(), None);
     let mut head_a2 = StoreHead::<Dummy>::new("a".to_string(), None);
+    let msg_1 = Dummy::new("1".to_string(), None);
+    let msg_2 = Dummy::new("2".to_string(), None);
+    let msg_3 = Dummy::new("3".to_string(), None);
 
     head_a.insert(msg_1.clone());
     head_a2.insert(msg_3.clone());
@@ -86,4 +98,38 @@ fn basic_head_memory_tests() {
     head_a.insert(msg_3.clone());
     head_a2.insert(msg_1.clone());
     assert_eq!(head_a.hash_tip(), head_a2.hash_tip());
+
+    // Make sure that we generate proper Uuid'ss
+    head_a.insert(Dummy::new("4".to_string(), None));
+    head_a2.insert(Dummy::new("4".to_string(), None));
+    assert_ne!(head_a.hash_tip(), head_a2.hash_tip());
+}
+
+#[test]
+fn head_persistence() {
+    let tmp = tempdir().unwrap();
+    let mut head = StoreHead::<Dummy>::new("a".to_string(), Some(tmp.path()));
+    let hash = head.hash_tip();
+    assert_eq!(head.len(), 0);
+
+    let mut head = StoreHead::<Dummy>::new("a".to_string(), Some(tmp.path()));
+    assert_eq!(hash, head.hash_tip());
+
+    head.insert(Dummy::new("1".to_string(), None));
+    let hash = head.hash_tip();
+    // Explicitly dropping head_a to ensure everything is written to disk
+    drop(head);
+    let mut head = StoreHead::<Dummy>::new("a".to_string(), Some(tmp.path()));
+    assert_eq!(head.len(), 1);
+    assert_eq!(hash, head.hash_tip());
+
+    // Insert a couple of messages and make sure the hash stays the same
+    for i in 2..101 {
+        head.insert(Dummy::new(format!("{i}"), None));
+    }
+    let hash = head.hash_tip();
+    drop(head);
+    let mut head = StoreHead::<Dummy>::new("a".to_string(), Some(tmp.path()));
+    assert_eq!(head.len(), 100);
+    assert_eq!(hash, head.hash_tip());
 }
