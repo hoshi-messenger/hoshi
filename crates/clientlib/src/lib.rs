@@ -23,4 +23,4 @@ pub use node::{
     HoshiNode, HoshiNodePayload, NodeStore, chat_path, peer_key_from_chat_path, user_path,
 };
 pub use relay::RelayInfo;
-pub use store::{HeadCommand, RepoCommand, Store, StoreHead, StoreRepo};
+pub use store::{HeadCommand, Store, StoreHead};

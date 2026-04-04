@@ -19,21 +19,25 @@ pub struct StoreHead<T: Store> {
     file: Option<BufWriter<File>>,
     messages: BTreeMap<Uuid, T>,
     hashes: HashMap<Uuid, blake3::Hash>,
+    remotes: HashMap<String, StoreHeadRemote>,
+}
+
+pub struct StoreHeadRemote {
+    pub key: String,
+    pub tip: blake3::Hash,
+}
+
+impl StoreHeadRemote {
+    pub fn new(key: String, tip: blake3::Hash) -> Self {
+        Self { key, tip }
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(bound = "T: Store")]
 pub enum HeadCommand<T: Store> {
-    Has(Vec<(Uuid, [u8; 32])>),
-    Get(Vec<Uuid>),
     Put(Vec<T>),
-}
-
-#[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(bound = "T: Store")]
-pub struct RepoCommand<T: Store> {
-    pub head: String,
-    pub commands: Vec<HeadCommand<T>>,
+    Tip([u8; 32]),
 }
 
 impl<T: Store> StoreHead<T> {
@@ -58,9 +62,17 @@ impl<T: Store> StoreHead<T> {
         Self {
             name,
             file,
-            hashes: HashMap::new(),
             messages,
+            hashes: HashMap::new(),
+            remotes: HashMap::new(),
         }
+    }
+
+    pub fn add_remote(&mut self, key: String, tip: Option<blake3::Hash>) {
+        let tip = tip.unwrap_or_else(|| self.hash_start());
+        self.remotes
+            .entry(key.clone())
+            .or_insert_with(move || StoreHeadRemote::new(key, tip));
     }
 
     pub fn get(&self, uuid: Uuid) -> Option<&T> {
@@ -72,9 +84,9 @@ impl<T: Store> StoreHead<T> {
     }
 
     fn hash_start(&self) -> blake3::Hash {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(self.name.as_bytes());
-        hasher.finalize()
+        blake3::Hasher::new()
+            .update(self.name.as_bytes())
+            .finalize()
     }
 
     fn load_messages(path: PathBuf) -> Result<BTreeMap<Uuid, T>> {
@@ -105,7 +117,7 @@ impl<T: Store> StoreHead<T> {
     pub fn hash(&mut self, uuid: Uuid) -> Option<blake3::Hash> {
         if let Some(hash) = self.hashes.get(&uuid) {
             return Some(*hash);
-        }
+        };
         let mut range = self.messages.range(uuid..);
         let Some(cur) = range.next() else {
             return None;
@@ -120,10 +132,10 @@ impl<T: Store> StoreHead<T> {
                     .expect("Couldn't hash entry that was in StoreHead")
             }
         };
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(prev.as_bytes());
-        hasher.update(cur.as_bytes());
-        let cur = hasher.finalize();
+        let cur = blake3::Hasher::new()
+            .update(prev.as_bytes())
+            .update(cur.as_bytes())
+            .finalize();
         self.hashes.insert(uuid, cur);
         Some(cur)
     }
@@ -157,24 +169,16 @@ impl<T: Store> StoreHead<T> {
         self.hashes.retain(|id, _| id < &uuid);
     }
 
-    pub fn exec(&mut self, cmd: HeadCommand<T>) {
-        match cmd {
-            HeadCommand::Put(v) => v.into_iter().for_each(|msg| self.insert(msg)),
-            _ => unimplemented!("HeadCommand"),
-        }
+    pub fn rx(&mut self, from: String, cmd: HeadCommand<T>) {
+        if !self.remotes.contains_key(&from) {
+            self.add_remote(from.clone(), None);
+        };
+        let Some(remote) = self.remotes.get(&from) else {
+            panic!("add_remote didn't work!");
+        };
     }
-}
 
-pub struct StoreRepo<T: Store> {
-    persistence_path: Option<PathBuf>,
-    stores: HashMap<String, StoreHead<T>>,
-}
-
-impl<T: Store> StoreRepo<T> {
-    pub fn new(persistence_path: Option<PathBuf>) -> Self {
-        Self {
-            persistence_path,
-            stores: HashMap::new(),
-        }
+    pub fn tx(&mut self, tx: impl FnMut(String, HeadCommand<T>)) {
+        for remote in self.remotes.values_mut() {}
     }
 }

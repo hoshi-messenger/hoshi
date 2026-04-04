@@ -1,5 +1,5 @@
 use blake3::Hash;
-use hoshi_clientlib::{Store, StoreHead};
+use hoshi_clientlib::{HeadCommand, Store, StoreHead};
 use serde::{Deserialize, Serialize};
 use tempfile::tempdir;
 use uuid::Uuid;
@@ -29,6 +29,17 @@ impl Dummy {
 
         Self { id, text }
     }
+}
+
+fn sync_stores<T: Store>(a: &mut StoreHead<T>, b: &mut StoreHead<T>) {
+    // Make sure the 2 remotes know about each other
+    a.add_remote("b".to_string(), None);
+    b.add_remote("a".to_string(), None);
+    // We need a place to store messages for the 2 to communicate via
+    let mut inbox_a: Vec<HeadCommand<T>> = vec![];
+    let mut inbox_b: Vec<HeadCommand<T>> = vec![];
+    // Hard upper bound, syncing must succeed after 32 iterations
+    for i in 0..32 {}
 }
 
 #[test]
@@ -132,4 +143,13 @@ fn head_persistence() {
     let mut head = StoreHead::<Dummy>::new("a".to_string(), Some(tmp.path()));
     assert_eq!(head.len(), 100);
     assert_eq!(hash, head.hash_tip());
+}
+
+#[test]
+fn basic_sync() {
+    let mut head_a = StoreHead::<Dummy>::new("a".to_string(), None);
+    let mut head_a2 = StoreHead::<Dummy>::new("a".to_string(), None);
+
+    head_a.insert(Dummy::new("1".to_string(), None));
+    assert_ne!(head_a.hash_tip(), head_a2.hash_tip());
 }
