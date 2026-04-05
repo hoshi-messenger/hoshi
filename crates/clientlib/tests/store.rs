@@ -31,7 +31,7 @@ impl Dummy {
     }
 }
 
-fn sync_stores<T: Store>(a: &mut StoreHead<T>, b: &mut StoreHead<T>) {
+fn sync_stores<T: Store>(a: &mut StoreHead<T>, b: &mut StoreHead<T>, max_rounds: i32) {
     // Make sure the 2 remotes know about each other
     a.add_remote("b".to_string(), None);
     b.add_remote("a".to_string(), None);
@@ -39,7 +39,20 @@ fn sync_stores<T: Store>(a: &mut StoreHead<T>, b: &mut StoreHead<T>) {
     let mut inbox_a: Vec<HeadCommand<T>> = vec![];
     let mut inbox_b: Vec<HeadCommand<T>> = vec![];
     // Hard upper bound, syncing must succeed after 32 iterations
-    for i in 0..32 {}
+    for _i in 0..max_rounds {
+        inbox_a.drain(0..).for_each(|msg| a.rx("b", msg));
+        inbox_b.drain(0..).for_each(|msg| b.rx("a", msg));
+        a.tx(|dest, msg| {
+            assert_eq!(dest, "b");
+            eprintln!("a->b = {:?}", &msg);
+            inbox_b.push(msg);
+        });
+        b.tx(|dest, msg| {
+            assert_eq!(dest, "a");
+            eprintln!("a<-b = {:?}", &msg);
+            inbox_a.push(msg);
+        });
+    }
 }
 
 #[test]
@@ -147,9 +160,40 @@ fn head_persistence() {
 
 #[test]
 fn basic_sync() {
-    let mut head_a = StoreHead::<Dummy>::new("a".to_string(), None);
-    let mut head_a2 = StoreHead::<Dummy>::new("a".to_string(), None);
+    let mut a = StoreHead::<Dummy>::new("t".to_string(), None);
+    let mut b = StoreHead::<Dummy>::new("t".to_string(), None);
 
-    head_a.insert(Dummy::new("1".to_string(), None));
-    assert_ne!(head_a.hash_tip(), head_a2.hash_tip());
+    a.insert(Dummy::new("0".to_string(), None));
+    assert_ne!(a.hash_tip(), b.hash_tip());
+
+    sync_stores(&mut a, &mut b, 2);
+    assert_eq!(a.hash_tip(), b.hash_tip());
+
+    eprintln!(" == Phase 0 ==");
+    for i in 1..8 {
+        a.insert(Dummy::new(format!("{i}"), None));
+    }
+    assert_ne!(a.hash_tip(), b.hash_tip());
+    sync_stores(&mut a, &mut b, 8);
+    assert_eq!(a.hash_tip(), b.hash_tip());
+    assert_eq!(a.len(), 8);
+    assert_eq!(a.len(), b.len());
+
+    eprintln!(" == Phase 1 ==");
+    for i in 8..16 {
+        b.insert(Dummy::new(format!("{i}"), None));
+    }
+    sync_stores(&mut a, &mut b, 8);
+    assert_eq!(a.hash_tip(), b.hash_tip());
+    assert_eq!(a.len(), 16);
+    assert_eq!(a.len(), b.len());
+
+    eprintln!(" == Phase 2 ==");
+    for i in 16..32 {
+        a.insert(Dummy::new(format!("{i}"), None));
+    }
+    sync_stores(&mut a, &mut b, 64);
+    assert_eq!(a.hash_tip(), b.hash_tip());
+    assert_eq!(a.len(), 256);
+    assert_eq!(a.len(), b.len());
 }

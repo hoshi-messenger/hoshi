@@ -15,12 +15,12 @@ uuid = { workspace = true }
 serde = { workspace = true }
 rmp-serde = { workspace = true }
 blake3 = { workspace = true }
-
 ed25519-dalek = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 x509-cert = { workspace = true }
+bimap = { workspace = true }
 
 [dev-dependencies]
 blake3 = { workspace = true }

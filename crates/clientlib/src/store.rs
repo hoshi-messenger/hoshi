@@ -3,13 +3,15 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
+use bimap::BiHashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub trait Store: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug {
+pub trait Store: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug + Clone {
     fn msg_id(&self) -> Uuid;
     fn msg_hash(&self) -> blake3::Hash;
 }
@@ -18,25 +20,32 @@ pub struct StoreHead<T: Store> {
     name: String,
     file: Option<BufWriter<File>>,
     messages: BTreeMap<Uuid, T>,
-    hashes: HashMap<Uuid, blake3::Hash>,
+    hashes: BiHashMap<Uuid, blake3::Hash>,
     remotes: HashMap<String, StoreHeadRemote>,
 }
 
 pub struct StoreHeadRemote {
     pub key: String,
     pub tip: blake3::Hash,
+    pub cooldown_until: Instant,
+    pub tip_update_queued: bool,
 }
 
 impl StoreHeadRemote {
     pub fn new(key: String, tip: blake3::Hash) -> Self {
-        Self { key, tip }
+        Self {
+            key,
+            tip,
+            cooldown_until: Instant::now(),
+            tip_update_queued: false,
+        }
     }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(bound = "T: Store")]
 pub enum HeadCommand<T: Store> {
-    Put(Vec<T>),
+    Put(T),
     Tip([u8; 32]),
 }
 
@@ -63,7 +72,7 @@ impl<T: Store> StoreHead<T> {
             name,
             file,
             messages,
-            hashes: HashMap::new(),
+            hashes: BiHashMap::new(),
             remotes: HashMap::new(),
         }
     }
@@ -115,7 +124,7 @@ impl<T: Store> StoreHead<T> {
     }
 
     pub fn hash(&mut self, uuid: Uuid) -> Option<blake3::Hash> {
-        if let Some(hash) = self.hashes.get(&uuid) {
+        if let Some(hash) = self.hashes.get_by_left(&uuid) {
             return Some(*hash);
         };
         let mut range = self.messages.range(uuid..);
@@ -140,13 +149,13 @@ impl<T: Store> StoreHead<T> {
         Some(cur)
     }
 
-    pub fn insert(&mut self, msg: T) {
+    pub fn insert(&mut self, msg: T) -> bool {
         let uuid = msg.msg_id();
         if self.messages.contains_key(&uuid) {
             if cfg!(debug_assertions) {
                 eprintln!("Duplicate insert: {}:{}", self.name, uuid);
             }
-            return;
+            return false;
         }
         if let Some(file) = self.file.as_mut() {
             match rmp_serde::encode::to_vec(&msg) {
@@ -167,18 +176,67 @@ impl<T: Store> StoreHead<T> {
         self.messages.insert(uuid, msg);
         // invalidate cached hashes for uuid and everything after
         self.hashes.retain(|id, _| id < &uuid);
+
+        // Reset remote cooldown so we immediately try syncing
+        let now = Instant::now();
+        for remote in self.remotes.values_mut() {
+            remote.cooldown_until = now.clone();
+        }
+        true
     }
 
-    pub fn rx(&mut self, from: String, cmd: HeadCommand<T>) {
-        if !self.remotes.contains_key(&from) {
-            self.add_remote(from.clone(), None);
+    pub fn rx(&mut self, from: &str, cmd: HeadCommand<T>) {
+        if !self.remotes.contains_key(from) {
+            self.add_remote(from.to_string(), None);
         };
-        let Some(remote) = self.remotes.get(&from) else {
+        let Some(remote) = self.remotes.get_mut(from) else {
             panic!("add_remote didn't work!");
         };
+
+        remote.cooldown_until = Instant::now();
+        match cmd {
+            HeadCommand::Tip(tip) => {
+                remote.tip = blake3::Hash::from_bytes(tip);
+            }
+            HeadCommand::Put(msg) => {
+                if self.insert(msg) {
+                    self.remotes
+                        .get_mut(from)
+                        .map(|r| r.tip_update_queued = true);
+                }
+            }
+        }
     }
 
-    pub fn tx(&mut self, tx: impl FnMut(String, HeadCommand<T>)) {
-        for remote in self.remotes.values_mut() {}
+    pub fn tx(&mut self, mut tx: impl FnMut(String, HeadCommand<T>)) {
+        let tip = self.hash_tip();
+        let start = self.hash_start();
+        for remote in self.remotes.values_mut() {
+            if remote.tip_update_queued {
+                remote.tip_update_queued = false;
+                tx(remote.key.clone(), HeadCommand::Tip(tip.as_bytes().clone()));
+            }
+
+            if remote.tip == tip {
+                continue;
+            };
+            let now = Instant::now();
+            if now < remote.cooldown_until {
+                continue;
+            }
+            if remote.tip == start {
+                for (_, msg) in self.messages.iter().take(8) {
+                    tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
+                }
+            } else if let Some(uuid) = self.hashes.get_by_right(&remote.tip) {
+                for (_, msg) in self.messages.range(uuid..).skip(1).take(8) {
+                    tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
+                }
+            } else {
+                eprintln!("We require '{}' to PUT", &remote.key);
+            }
+            tx(remote.key.clone(), HeadCommand::Tip(tip.as_bytes().clone()));
+            remote.cooldown_until = now + Duration::from_secs(60);
+        }
     }
 }
