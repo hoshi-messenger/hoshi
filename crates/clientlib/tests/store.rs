@@ -160,6 +160,9 @@ fn head_persistence() {
 
 #[test]
 fn basic_sync() {
+    // These are rather simple, we just test that if one client has newer
+    // messages than another one we sync them, basically the best-case scenario
+    // where we can just fast-forward
     let mut a = StoreHead::<Dummy>::new("t".to_string(), None);
     let mut b = StoreHead::<Dummy>::new("t".to_string(), None);
 
@@ -174,7 +177,7 @@ fn basic_sync() {
         a.insert(Dummy::new(format!("{i}"), None));
     }
     assert_ne!(a.hash_tip(), b.hash_tip());
-    sync_stores(&mut a, &mut b, 8);
+    sync_stores(&mut a, &mut b, 4);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), 8);
     assert_eq!(a.len(), b.len());
@@ -183,7 +186,7 @@ fn basic_sync() {
     for i in 8..16 {
         b.insert(Dummy::new(format!("{i}"), None));
     }
-    sync_stores(&mut a, &mut b, 8);
+    sync_stores(&mut a, &mut b, 4);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), 16);
     assert_eq!(a.len(), b.len());
@@ -192,8 +195,62 @@ fn basic_sync() {
     for i in 16..32 {
         a.insert(Dummy::new(format!("{i}"), None));
     }
-    sync_stores(&mut a, &mut b, 64);
+    sync_stores(&mut a, &mut b, 16);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), 32);
+    assert_eq!(a.len(), b.len());
+
+    eprintln!(" == Phase 3 ==");
+    for i in 32..256 {
+        a.insert(Dummy::new(format!("{i}"), None));
+    }
+    sync_stores(&mut a, &mut b, 64);
+    assert_eq!(a.hash_tip(), b.hash_tip());
+    assert_eq!(a.len(), 256);
+    assert_eq!(a.len(), b.len());
+}
+
+#[test]
+fn complicated_sync() {
+    // Here we test some slightly more complicated sync scenarios, mainly by
+    // making sure that if both a and b have new messages the other doesn't know
+    // about that they still converge after exchanging a couple of sync messages
+    let mut a = StoreHead::<Dummy>::new("t".to_string(), None);
+    let mut b = StoreHead::<Dummy>::new("t".to_string(), None);
+
+    a.insert(Dummy::new("0".to_string(), None));
+    assert_ne!(a.hash_tip(), b.hash_tip());
+    sync_stores(&mut a, &mut b, 2);
+    assert_eq!(a.hash_tip(), b.hash_tip());
+
+    eprintln!(" == Phase 0 ==");
+    for i in 1..16 {
+        a.insert(Dummy::new(format!("{i}"), None));
+    }
+    for i in 16..32 {
+        b.insert(Dummy::new(format!("{i}"), None));
+    }
+    assert_ne!(a.hash_tip(), b.hash_tip());
+    sync_stores(&mut a, &mut b, 16);
+    assert_eq!(a.hash_tip(), b.hash_tip());
+    assert_eq!(a.len(), 32);
+    assert_eq!(a.len(), b.len());
+
+    for i in 32..256 {
+        let msg = Dummy::new(format!("{i}"), None);
+        match i & 3 {
+            0 => a.insert(msg.clone()),
+            1 => b.insert(msg.clone()),
+            2 => a.insert(msg.clone()),
+            _ => {
+                a.insert(msg.clone());
+                b.insert(msg.clone())
+            }
+        };
+    }
+    assert_ne!(a.hash_tip(), b.hash_tip());
+    sync_stores(&mut a, &mut b, 256);
+    assert_eq!(a.len(), 256);
+    assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), b.len());
 }

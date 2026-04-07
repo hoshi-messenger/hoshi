@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::Result;
 use bimap::BiHashMap;
+use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -246,16 +247,35 @@ impl<T: Store> StoreHead<T> {
                     tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
                 }
             } else {
-                for msg in self.messages.values() {
-                    eprintln!("{} - {}", msg.msg_id(), msg.msg_hash());
+                // In the long run we should probably make this more sophisticated,
+                // though so far I'm not sure how often this condition occurs,
+                // so instead of doing a complicated approach where we figure out
+                // which messages cause the heads to diverge, we just send the newest
+                // 4 messages and 12 random prior messages which should get the clients
+                // in sync somewhat quickly in most cases.
+                //
+                // In most cases they should be in-sync after one round because
+                // the most likely scenario is 2 clients creating messages at
+                // exactly the same time, especially in group chats though we
+                // might get messages from an offline client after a while which
+                // is why we send the 6 random old messages. One slight optimization
+                // we should try is instead of sending only the hash of the head
+                // we send 4-8 hashes to split the messages into "zones" then we
+                // could determine where the split started to occur and focus the
+                // sync on that zone.
+                for (_, msg) in self.messages.iter().rev().take(4) {
+                    tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
                 }
-                for hash in self.hashes.right_values() {
-                    eprintln!("{}", hash);
+
+                let mut rng = rand::rng();
+                let mut arr = self.messages.iter().collect::<Vec<_>>();
+                arr.shuffle(&mut rng);
+                for (_, msg) in arr.into_iter().take(12) {
+                    tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
                 }
-                eprintln!("We require '{}' to PUT", &remote.key);
             }
             tx(remote.key.clone(), HeadCommand::Tip(tip.as_bytes().clone()));
-            remote.cooldown_until = now + Duration::from_secs(60);
+            remote.cooldown_until = now + Duration::from_secs(300);
         }
     }
 }

@@ -12,6 +12,7 @@ reqwest-websocket = { workspace = true }
 dirs = { workspace = true }
 rand_core = { workspace = true }
 uuid = { workspace = true }
+rand = { workspace = true }
 serde = { workspace = true }
 rmp-serde = { workspace = true }
 blake3 = { workspace = true }

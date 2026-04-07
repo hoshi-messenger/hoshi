@@ -1279,6 +1279,7 @@ dependencies = [
  "dirs",
  "ed25519-dalek",
  "futures",
+ "rand 0.10.0",
  "rand_core 0.6.4",
  "rcgen",
  "reqwest",
