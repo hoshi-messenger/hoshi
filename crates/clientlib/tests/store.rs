@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use blake3::Hash;
 use hoshi_clientlib::{HeadCommand, Store, StoreHead};
 use serde::{Deserialize, Serialize};
@@ -52,6 +54,37 @@ fn sync_stores<T: Store>(a: &mut StoreHead<T>, b: &mut StoreHead<T>, max_rounds:
             eprintln!("a<-b = {:?}", &msg);
             inbox_a.push(msg);
         });
+    }
+}
+
+fn sync_many_direct<T: Store>(stores: &mut HashMap<String, StoreHead<T>>, max_rounds: i32) {
+    let mut inbox: HashMap<String, Vec<(String, HeadCommand<T>)>> = HashMap::new();
+    for name in stores.keys() {
+        inbox.insert(name.to_string(), vec![]);
+    }
+    for (key, store) in stores.iter_mut() {
+        for cur_key in inbox.keys() {
+            if cur_key != key {
+                store.add_remote(cur_key.to_string(), None);
+            }
+        }
+    }
+
+    for _i in 0..max_rounds {
+        for (key, store) in stores.iter_mut() {
+            let inbox = inbox.get_mut(key).unwrap();
+            inbox
+                .drain(0..)
+                .for_each(|(from, msg)| store.rx(&from, msg));
+        }
+
+        for (key, store) in stores.iter_mut() {
+            store.tx(|dest, msg| {
+                assert_ne!(key, &dest);
+                let inbox = inbox.get_mut(&dest).unwrap();
+                inbox.push((key.to_string(), msg));
+            });
+        }
     }
 }
 
@@ -253,4 +286,142 @@ fn complicated_sync() {
     assert_eq!(a.len(), 256);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), b.len());
+}
+
+#[test]
+fn complicated_sync_many() {
+    // Here we test some slightly more complicated sync scenarios, mainly by
+    // making sure that if both a and b have new messages the other doesn't know
+    // about that they still converge after exchanging a couple of sync messages
+    let mut stores = HashMap::<String, StoreHead<Dummy>>::new();
+    stores.insert(
+        "a".to_string(),
+        StoreHead::<Dummy>::new("t".to_string(), None),
+    );
+    stores.insert(
+        "b".to_string(),
+        StoreHead::<Dummy>::new("t".to_string(), None),
+    );
+    stores.insert(
+        "c".to_string(),
+        StoreHead::<Dummy>::new("t".to_string(), None),
+    );
+    stores.insert(
+        "d".to_string(),
+        StoreHead::<Dummy>::new("t".to_string(), None),
+    );
+
+    stores
+        .get_mut("a")
+        .unwrap()
+        .insert(Dummy::new("0".to_string(), None));
+    stores
+        .get_mut("b")
+        .unwrap()
+        .insert(Dummy::new("1".to_string(), None));
+    stores
+        .get_mut("c")
+        .unwrap()
+        .insert(Dummy::new("2".to_string(), None));
+    stores
+        .get_mut("d")
+        .unwrap()
+        .insert(Dummy::new("3".to_string(), None));
+    assert_eq!(stores.get("a").unwrap().len(), 1);
+    assert_eq!(stores.get("b").unwrap().len(), 1);
+    assert_eq!(stores.get("c").unwrap().len(), 1);
+    assert_eq!(stores.get("d").unwrap().len(), 1);
+    assert_ne!(
+        stores.get_mut("a").unwrap().hash_tip(),
+        stores.get_mut("b").unwrap().hash_tip()
+    );
+    assert_ne!(
+        stores.get_mut("b").unwrap().hash_tip(),
+        stores.get_mut("c").unwrap().hash_tip()
+    );
+    assert_ne!(
+        stores.get_mut("c").unwrap().hash_tip(),
+        stores.get_mut("d").unwrap().hash_tip()
+    );
+    sync_many_direct(&mut stores, 4);
+    assert_eq!(
+        stores.get_mut("a").unwrap().hash_tip(),
+        stores.get_mut("b").unwrap().hash_tip()
+    );
+    assert_eq!(
+        stores.get_mut("b").unwrap().hash_tip(),
+        stores.get_mut("c").unwrap().hash_tip()
+    );
+    assert_eq!(
+        stores.get_mut("c").unwrap().hash_tip(),
+        stores.get_mut("d").unwrap().hash_tip()
+    );
+    assert_eq!(stores.get("a").unwrap().len(), 4);
+}
+
+#[test]
+fn complicated_sync_many_many() {
+    // Here we test some slightly more complicated sync scenarios, mainly by
+    // making sure that if both a and b have new messages the other doesn't know
+    // about that they still converge after exchanging a couple of sync messages
+    let mut stores = HashMap::<String, StoreHead<Dummy>>::new();
+    for c in 'a'..='z' {
+        stores.insert(
+            c.to_string(),
+            StoreHead::<Dummy>::new("t".to_string(), None),
+        );
+    }
+
+    for i in 0..32 {
+        stores
+            .get_mut("a")
+            .unwrap()
+            .insert(Dummy::new(i.to_string(), None));
+    }
+    for i in 32..64 {
+        stores
+            .get_mut("b")
+            .unwrap()
+            .insert(Dummy::new(i.to_string(), None));
+    }
+
+    assert_eq!(stores.get("a").unwrap().len(), 32);
+    assert_eq!(stores.get("b").unwrap().len(), 32);
+    assert_eq!(stores.get("c").unwrap().len(), 0);
+    assert_eq!(stores.get("d").unwrap().len(), 0);
+    assert_eq!(stores.get("z").unwrap().len(), 0);
+    assert_ne!(
+        stores.get_mut("a").unwrap().hash_tip(),
+        stores.get_mut("b").unwrap().hash_tip()
+    );
+    assert_ne!(
+        stores.get_mut("b").unwrap().hash_tip(),
+        stores.get_mut("c").unwrap().hash_tip()
+    );
+    assert_ne!(
+        stores.get_mut("b").unwrap().hash_tip(),
+        stores.get_mut("d").unwrap().hash_tip()
+    );
+    assert_ne!(
+        stores.get_mut("b").unwrap().hash_tip(),
+        stores.get_mut("z").unwrap().hash_tip()
+    );
+    sync_many_direct(&mut stores, 16);
+    assert_eq!(
+        stores.get_mut("a").unwrap().hash_tip(),
+        stores.get_mut("b").unwrap().hash_tip()
+    );
+    assert_eq!(
+        stores.get_mut("b").unwrap().hash_tip(),
+        stores.get_mut("c").unwrap().hash_tip()
+    );
+    assert_eq!(
+        stores.get_mut("c").unwrap().hash_tip(),
+        stores.get_mut("d").unwrap().hash_tip()
+    );
+    assert_eq!(
+        stores.get_mut("d").unwrap().hash_tip(),
+        stores.get_mut("z").unwrap().hash_tip()
+    );
+    assert_eq!(stores.get("z").unwrap().len(), 64);
 }
