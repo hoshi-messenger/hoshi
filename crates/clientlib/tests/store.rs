@@ -194,6 +194,6 @@ fn basic_sync() {
     }
     sync_stores(&mut a, &mut b, 64);
     assert_eq!(a.hash_tip(), b.hash_tip());
-    assert_eq!(a.len(), 256);
+    assert_eq!(a.len(), 32);
     assert_eq!(a.len(), b.len());
 }

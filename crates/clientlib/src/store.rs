@@ -127,16 +127,29 @@ impl<T: Store> StoreHead<T> {
         if let Some(hash) = self.hashes.get_by_left(&uuid) {
             return Some(*hash);
         };
-        let mut range = self.messages.range(uuid..);
-        let Some(cur) = range.next() else {
+        let Some(cur) = self.messages.get(&uuid) else {
             return None;
         };
-        let cur = cur.1.msg_hash();
+        let cur = cur.msg_hash();
 
+        let mut range = self.messages.range_mut(..uuid);
         let prev = match range.next_back() {
-            None => self.hash_start(),
+            None => {
+                if cfg!(debug_assertions) {
+                    if let Some(first) = self.messages.first_key_value() {
+                        if uuid != *first.0 {
+                            panic!(
+                                "{} - prev is none, but first entry has uuid {}",
+                                uuid, first.0
+                            );
+                        }
+                    }
+                }
+                self.hash_start()
+            }
             Some((id, _)) => {
                 let id = *id;
+                debug_assert_ne!(id, uuid);
                 self.hash(id)
                     .expect("Couldn't hash entry that was in StoreHead")
             }
@@ -233,6 +246,12 @@ impl<T: Store> StoreHead<T> {
                     tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
                 }
             } else {
+                for msg in self.messages.values() {
+                    eprintln!("{} - {}", msg.msg_id(), msg.msg_hash());
+                }
+                for hash in self.hashes.right_values() {
+                    eprintln!("{}", hash);
+                }
                 eprintln!("We require '{}' to PUT", &remote.key);
             }
             tx(remote.key.clone(), HeadCommand::Tip(tip.as_bytes().clone()));
