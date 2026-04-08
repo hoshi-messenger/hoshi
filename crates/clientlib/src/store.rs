@@ -28,6 +28,7 @@ pub struct StoreHead<T: Store> {
 pub struct StoreHeadRemote {
     pub key: String,
     pub tip: blake3::Hash,
+    pub tip_secondary: blake3::Hash,
     pub cooldown_until: Instant,
     pub tip_update_queued: bool,
 }
@@ -37,6 +38,7 @@ impl StoreHeadRemote {
         Self {
             key,
             tip,
+            tip_secondary: tip,
             cooldown_until: Instant::now(),
             tip_update_queued: false,
         }
@@ -48,6 +50,7 @@ impl StoreHeadRemote {
 pub enum HeadCommand<T: Store> {
     Put(T),
     Tip([u8; 32]),
+    TipSecondary([u8; 32]),
 }
 
 impl<T: Store> StoreHead<T> {
@@ -212,6 +215,9 @@ impl<T: Store> StoreHead<T> {
             HeadCommand::Tip(tip) => {
                 remote.tip = blake3::Hash::from_bytes(tip);
             }
+            HeadCommand::TipSecondary(tip) => {
+                remote.tip_secondary = blake3::Hash::from_bytes(tip);
+            }
             HeadCommand::Put(msg) => {
                 if self.insert(msg) {
                     self.remotes
@@ -225,6 +231,8 @@ impl<T: Store> StoreHead<T> {
     pub fn tx(&mut self, mut tx: impl FnMut(String, HeadCommand<T>)) {
         let tip = self.hash_tip();
         let start = self.hash_start();
+        let mut secondary_tip_queue: Vec<(String, Uuid)> = vec![];
+
         for remote in self.remotes.values_mut() {
             if remote.tip_update_queued {
                 remote.tip_update_queued = false;
@@ -238,44 +246,66 @@ impl<T: Store> StoreHead<T> {
             if now < remote.cooldown_until {
                 continue;
             }
-            if remote.tip == start {
-                for (_, msg) in self.messages.iter().take(8) {
-                    tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
-                }
-            } else if let Some(uuid) = self.hashes.get_by_right(&remote.tip) {
-                for (_, msg) in self.messages.range(uuid..).skip(1).take(8) {
-                    tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
-                }
-            } else {
-                // In the long run we should probably make this more sophisticated,
-                // though so far I'm not sure how often this condition occurs,
-                // so instead of doing a complicated approach where we figure out
-                // which messages cause the heads to diverge, we just send the newest
-                // 4 messages and 12 random prior messages which should get the clients
-                // in sync somewhat quickly in most cases.
-                //
-                // In most cases they should be in-sync after one round because
-                // the most likely scenario is 2 clients creating messages at
-                // exactly the same time, especially in group chats though we
-                // might get messages from an offline client after a while which
-                // is why we send the 6 random old messages. One slight optimization
-                // we should try is instead of sending only the hash of the head
-                // we send 4-8 hashes to split the messages into "zones" then we
-                // could determine where the split started to occur and focus the
-                // sync on that zone.
-                for (_, msg) in self.messages.iter().rev().take(4) {
-                    tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
-                }
+            if remote.tip_secondary != tip {
+                if remote.tip == start {
+                    let mut last_id: Option<Uuid> = None;
+                    for (_, msg) in self.messages.iter().take(8) {
+                        last_id = Some(msg.msg_id());
+                        tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
+                    }
+                    if let Some(last_id) = last_id {
+                        secondary_tip_queue.push((remote.key.clone(), last_id));
+                    }
+                } else if let Some(uuid) = self.hashes.get_by_right(&remote.tip) {
+                    let mut last_id: Option<Uuid> = None;
+                    for (_, msg) in self.messages.range(uuid..).skip(1).take(8) {
+                        last_id = Some(msg.msg_id());
+                        tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
+                    }
+                    if let Some(last_id) = last_id {
+                        secondary_tip_queue.push((remote.key.clone(), last_id));
+                    }
+                } else {
+                    // In the long run we should probably make this more sophisticated,
+                    // though so far I'm not sure how often this condition occurs,
+                    // so instead of doing a complicated approach where we figure out
+                    // which messages cause the heads to diverge, we just send the newest
+                    // 4 messages and 12 random prior messages which should get the clients
+                    // in sync somewhat quickly in most cases.
+                    //
+                    // In most cases they should be in-sync after one round because
+                    // the most likely scenario is 2 clients creating messages at
+                    // exactly the same time, especially in group chats though we
+                    // might get messages from an offline client after a while which
+                    // is why we send the 6 random old messages. One slight optimization
+                    // we should try is instead of sending only the hash of the head
+                    // we send 4-8 hashes to split the messages into "zones" then we
+                    // could determine where the split started to occur and focus the
+                    // sync on that zone.
+                    for (_, msg) in self.messages.iter().rev().take(4) {
+                        tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
+                    }
 
-                let mut rng = rand::rng();
-                let mut arr = self.messages.iter().collect::<Vec<_>>();
-                arr.shuffle(&mut rng);
-                for (_, msg) in arr.into_iter().take(12) {
-                    tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
+                    let mut rng = rand::rng();
+                    let mut arr = self.messages.iter().collect::<Vec<_>>();
+                    arr.shuffle(&mut rng);
+                    for (_, msg) in arr.into_iter().take(12) {
+                        tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
+                    }
                 }
-            }
+            };
             tx(remote.key.clone(), HeadCommand::Tip(tip.as_bytes().clone()));
             remote.cooldown_until = now + Duration::from_secs(300);
+        }
+
+        for (dest, uuid) in secondary_tip_queue.into_iter() {
+            let tip_secondary = self.hash(uuid).expect("Couldn't hash secondary tip");
+            if tip != tip_secondary {
+                tx(
+                    dest,
+                    HeadCommand::TipSecondary(tip_secondary.as_bytes().clone()),
+                );
+            }
         }
     }
 }

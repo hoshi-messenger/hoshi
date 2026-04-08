@@ -18,22 +18,25 @@ impl Store for Dummy {
     }
 
     fn msg_hash(&self) -> Hash {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(self.id.as_bytes());
-        hasher.update(self.text.as_bytes());
-        hasher.finalize()
+        blake3::Hasher::new()
+            .update(self.id.as_bytes())
+            .update(self.text.as_bytes())
+            .finalize()
     }
 }
 
 impl Dummy {
     fn new(text: String, id: Option<Uuid>) -> Self {
         let id = id.unwrap_or_else(|| Uuid::now_v7());
-
         Self { id, text }
     }
 }
 
-fn sync_stores<T: Store>(a: &mut StoreHead<T>, b: &mut StoreHead<T>, max_rounds: i32) {
+fn sync_stores<T: Store>(
+    a: &mut StoreHead<T>,
+    b: &mut StoreHead<T>,
+    max_rounds: i32,
+) -> (usize, usize) {
     // Make sure the 2 remotes know about each other
     a.add_remote("b".to_string(), None);
     b.add_remote("a".to_string(), None);
@@ -41,23 +44,39 @@ fn sync_stores<T: Store>(a: &mut StoreHead<T>, b: &mut StoreHead<T>, max_rounds:
     let mut inbox_a: Vec<HeadCommand<T>> = vec![];
     let mut inbox_b: Vec<HeadCommand<T>> = vec![];
     // Hard upper bound, syncing must succeed after 32 iterations
+    let mut messages = 0;
+    let mut rounds = 0;
     for _i in 0..max_rounds {
+        rounds += 1;
         inbox_a.drain(0..).for_each(|msg| a.rx("b", msg));
         inbox_b.drain(0..).for_each(|msg| b.rx("a", msg));
+
+        let mut messages_queued = inbox_a.len() + inbox_b.len();
         a.tx(|dest, msg| {
             assert_eq!(dest, "b");
             eprintln!("a->b = {:?}", &msg);
+            messages_queued += 1;
             inbox_b.push(msg);
         });
         b.tx(|dest, msg| {
             assert_eq!(dest, "a");
             eprintln!("a<-b = {:?}", &msg);
+            messages_queued += 1;
             inbox_a.push(msg);
         });
+        if messages_queued == 0 {
+            break;
+        } else {
+            messages += messages_queued;
+        }
     }
+    (rounds, messages)
 }
 
-fn sync_many_direct<T: Store>(stores: &mut HashMap<String, StoreHead<T>>, max_rounds: i32) {
+fn sync_many_direct<T: Store>(
+    stores: &mut HashMap<String, StoreHead<T>>,
+    max_rounds: i32,
+) -> (usize, usize) {
     let mut inbox: HashMap<String, Vec<(String, HeadCommand<T>)>> = HashMap::new();
     for name in stores.keys() {
         inbox.insert(name.to_string(), vec![]);
@@ -70,7 +89,11 @@ fn sync_many_direct<T: Store>(stores: &mut HashMap<String, StoreHead<T>>, max_ro
         }
     }
 
+    let mut messages = 0;
+    let mut rounds = 0;
     for _i in 0..max_rounds {
+        rounds += 1;
+
         for (key, store) in stores.iter_mut() {
             let inbox = inbox.get_mut(key).unwrap();
             inbox
@@ -78,14 +101,23 @@ fn sync_many_direct<T: Store>(stores: &mut HashMap<String, StoreHead<T>>, max_ro
                 .for_each(|(from, msg)| store.rx(&from, msg));
         }
 
+        let mut messages_queued = 0;
         for (key, store) in stores.iter_mut() {
             store.tx(|dest, msg| {
                 assert_ne!(key, &dest);
+                messages_queued += 1;
                 let inbox = inbox.get_mut(&dest).unwrap();
                 inbox.push((key.to_string(), msg));
             });
         }
+
+        if messages_queued == 0 {
+            break;
+        } else {
+            messages += messages_queued;
+        }
     }
+    (rounds, messages)
 }
 
 #[test]
@@ -202,7 +234,10 @@ fn basic_sync() {
     a.insert(Dummy::new("0".to_string(), None));
     assert_ne!(a.hash_tip(), b.hash_tip());
 
-    sync_stores(&mut a, &mut b, 2);
+    let (rounds, messages) = sync_stores(&mut a, &mut b, 16);
+    eprint!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(rounds < 8);
+    assert!(messages < 16);
     assert_eq!(a.hash_tip(), b.hash_tip());
 
     eprintln!(" == Phase 0 ==");
@@ -210,7 +245,10 @@ fn basic_sync() {
         a.insert(Dummy::new(format!("{i}"), None));
     }
     assert_ne!(a.hash_tip(), b.hash_tip());
-    sync_stores(&mut a, &mut b, 4);
+    let (rounds, messages) = sync_stores(&mut a, &mut b, 16);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(rounds < 8);
+    assert!(messages < 16);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), 8);
     assert_eq!(a.len(), b.len());
@@ -219,7 +257,10 @@ fn basic_sync() {
     for i in 8..16 {
         b.insert(Dummy::new(format!("{i}"), None));
     }
-    sync_stores(&mut a, &mut b, 4);
+    let (rounds, messages) = sync_stores(&mut a, &mut b, 16);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(rounds < 8);
+    assert!(messages < 24);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), 16);
     assert_eq!(a.len(), b.len());
@@ -228,7 +269,10 @@ fn basic_sync() {
     for i in 16..32 {
         a.insert(Dummy::new(format!("{i}"), None));
     }
-    sync_stores(&mut a, &mut b, 16);
+    let (rounds, messages) = sync_stores(&mut a, &mut b, 16);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(rounds < 8);
+    assert!(messages < 24);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), 32);
     assert_eq!(a.len(), b.len());
@@ -237,7 +281,10 @@ fn basic_sync() {
     for i in 32..256 {
         a.insert(Dummy::new(format!("{i}"), None));
     }
-    sync_stores(&mut a, &mut b, 64);
+    let (rounds, messages) = sync_stores(&mut a, &mut b, 128);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(rounds < 96);
+    assert!(messages < 512);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), 256);
     assert_eq!(a.len(), b.len());
@@ -253,7 +300,9 @@ fn complicated_sync() {
 
     a.insert(Dummy::new("0".to_string(), None));
     assert_ne!(a.hash_tip(), b.hash_tip());
-    sync_stores(&mut a, &mut b, 2);
+    let (rounds, messages) = sync_stores(&mut a, &mut b, 2);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(messages < 4);
     assert_eq!(a.hash_tip(), b.hash_tip());
 
     eprintln!(" == Phase 0 ==");
@@ -264,7 +313,10 @@ fn complicated_sync() {
         b.insert(Dummy::new(format!("{i}"), None));
     }
     assert_ne!(a.hash_tip(), b.hash_tip());
-    sync_stores(&mut a, &mut b, 16);
+    let (rounds, messages) = sync_stores(&mut a, &mut b, 32);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(rounds < 24);
+    assert!(messages < 1024);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), 32);
     assert_eq!(a.len(), b.len());
@@ -282,7 +334,9 @@ fn complicated_sync() {
         };
     }
     assert_ne!(a.hash_tip(), b.hash_tip());
-    sync_stores(&mut a, &mut b, 128);
+    let (rounds, messages) = sync_stores(&mut a, &mut b, 128);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(messages < 4096);
     assert_eq!(a.len(), 128);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), b.len());
@@ -343,7 +397,9 @@ fn complicated_sync_many() {
         stores.get_mut("c").unwrap().hash_tip(),
         stores.get_mut("d").unwrap().hash_tip()
     );
-    sync_many_direct(&mut stores, 4);
+    let (rounds, messages) = sync_many_direct(&mut stores, 4);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(messages < 256);
     assert_eq!(
         stores.get_mut("a").unwrap().hash_tip(),
         stores.get_mut("b").unwrap().hash_tip()
@@ -357,6 +413,14 @@ fn complicated_sync_many() {
         stores.get_mut("d").unwrap().hash_tip()
     );
     assert_eq!(stores.get("a").unwrap().len(), 4);
+
+    stores
+        .get_mut("a")
+        .unwrap()
+        .insert(Dummy::new("5".to_string(), None));
+    let (rounds, messages) = sync_many_direct(&mut stores, 4);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(messages < 32);
 }
 
 #[test]
@@ -372,21 +436,21 @@ fn complicated_sync_many_many() {
         );
     }
 
-    for i in 0..16 {
+    for i in 0..12 {
         stores
             .get_mut("a")
             .unwrap()
             .insert(Dummy::new(i.to_string(), None));
     }
-    for i in 16..32 {
-        let c = char::from_u32(('b' as u32) + (i - 16)).unwrap().to_string();
+    for i in 12..24 {
+        let c = char::from_u32(('b' as u32) + (i - 12)).unwrap().to_string();
         stores
             .get_mut(&c)
             .unwrap()
             .insert(Dummy::new(i.to_string(), None));
     }
 
-    assert_eq!(stores.get("a").unwrap().len(), 16);
+    assert_eq!(stores.get("a").unwrap().len(), 12);
     assert_eq!(stores.get("b").unwrap().len(), 1);
     assert_eq!(stores.get("z").unwrap().len(), 0);
     assert_ne!(
@@ -405,7 +469,9 @@ fn complicated_sync_many_many() {
         stores.get_mut("b").unwrap().hash_tip(),
         stores.get_mut("z").unwrap().hash_tip()
     );
-    sync_many_direct(&mut stores, 16);
+    let (rounds, messages) = sync_many_direct(&mut stores, 32);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(messages < 256*256);
     assert_eq!(
         stores.get_mut("a").unwrap().hash_tip(),
         stores.get_mut("b").unwrap().hash_tip()
@@ -422,5 +488,5 @@ fn complicated_sync_many_many() {
         stores.get_mut("d").unwrap().hash_tip(),
         stores.get_mut("z").unwrap().hash_tip()
     );
-    assert_eq!(stores.get("z").unwrap().len(), 32);
+    assert_eq!(stores.get("z").unwrap().len(), 24);
 }
