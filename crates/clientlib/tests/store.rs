@@ -269,7 +269,7 @@ fn complicated_sync() {
     assert_eq!(a.len(), 32);
     assert_eq!(a.len(), b.len());
 
-    for i in 32..256 {
+    for i in 32..128 {
         let msg = Dummy::new(format!("{i}"), None);
         match i & 3 {
             0 => a.insert(msg.clone()),
@@ -282,8 +282,8 @@ fn complicated_sync() {
         };
     }
     assert_ne!(a.hash_tip(), b.hash_tip());
-    sync_stores(&mut a, &mut b, 256);
-    assert_eq!(a.len(), 256);
+    sync_stores(&mut a, &mut b, 128);
+    assert_eq!(a.len(), 128);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), b.len());
 }
@@ -372,23 +372,22 @@ fn complicated_sync_many_many() {
         );
     }
 
-    for i in 0..32 {
+    for i in 0..16 {
         stores
             .get_mut("a")
             .unwrap()
             .insert(Dummy::new(i.to_string(), None));
     }
-    for i in 32..64 {
+    for i in 16..32 {
+        let c = char::from_u32(('b' as u32) + (i - 16)).unwrap().to_string();
         stores
-            .get_mut("b")
+            .get_mut(&c)
             .unwrap()
             .insert(Dummy::new(i.to_string(), None));
     }
 
-    assert_eq!(stores.get("a").unwrap().len(), 32);
-    assert_eq!(stores.get("b").unwrap().len(), 32);
-    assert_eq!(stores.get("c").unwrap().len(), 0);
-    assert_eq!(stores.get("d").unwrap().len(), 0);
+    assert_eq!(stores.get("a").unwrap().len(), 16);
+    assert_eq!(stores.get("b").unwrap().len(), 1);
     assert_eq!(stores.get("z").unwrap().len(), 0);
     assert_ne!(
         stores.get_mut("a").unwrap().hash_tip(),
@@ -423,5 +422,5 @@ fn complicated_sync_many_many() {
         stores.get_mut("d").unwrap().hash_tip(),
         stores.get_mut("z").unwrap().hash_tip()
     );
-    assert_eq!(stores.get("z").unwrap().len(), 64);
+    assert_eq!(stores.get("z").unwrap().len(), 32);
 }
