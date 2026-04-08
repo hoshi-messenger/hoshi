@@ -81,11 +81,15 @@ impl<T: Store> StoreHead<T> {
         }
     }
 
-    pub fn add_remote(&mut self, key: String, tip: Option<blake3::Hash>) {
+    pub fn remote_add(&mut self, key: String, tip: Option<blake3::Hash>) {
         let tip = tip.unwrap_or_else(|| self.hash_start());
         self.remotes
             .entry(key.clone())
             .or_insert_with(move || StoreHeadRemote::new(key, tip));
+    }
+
+    pub fn remote_drop(&mut self, key: &str) {
+        self.remotes.remove(key);
     }
 
     pub fn get(&self, uuid: Uuid) -> Option<&T> {
@@ -204,7 +208,7 @@ impl<T: Store> StoreHead<T> {
 
     pub fn rx(&mut self, from: &str, cmd: HeadCommand<T>) {
         if !self.remotes.contains_key(from) {
-            self.add_remote(from.to_string(), None);
+            self.remote_add(from.to_string(), None);
         };
         let Some(remote) = self.remotes.get_mut(from) else {
             panic!("add_remote didn't work!");

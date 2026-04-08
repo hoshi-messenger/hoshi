@@ -38,8 +38,8 @@ fn sync_stores<T: Store>(
     max_rounds: i32,
 ) -> (usize, usize) {
     // Make sure the 2 remotes know about each other
-    a.add_remote("b".to_string(), None);
-    b.add_remote("a".to_string(), None);
+    a.remote_add("b".to_string(), None);
+    b.remote_add("a".to_string(), None);
     // We need a place to store messages for the 2 to communicate via
     let mut inbox_a: Vec<HeadCommand<T>> = vec![];
     let mut inbox_b: Vec<HeadCommand<T>> = vec![];
@@ -84,7 +84,7 @@ fn sync_many_direct<T: Store>(
     for (key, store) in stores.iter_mut() {
         for cur_key in inbox.keys() {
             if cur_key != key {
-                store.add_remote(cur_key.to_string(), None);
+                store.remote_add(cur_key.to_string(), None);
             }
         }
     }
@@ -240,7 +240,6 @@ fn basic_sync() {
     assert!(messages < 16);
     assert_eq!(a.hash_tip(), b.hash_tip());
 
-    eprintln!(" == Phase 0 ==");
     for i in 1..8 {
         a.insert(Dummy::new(format!("{i}"), None));
     }
@@ -253,7 +252,6 @@ fn basic_sync() {
     assert_eq!(a.len(), 8);
     assert_eq!(a.len(), b.len());
 
-    eprintln!(" == Phase 1 ==");
     for i in 8..16 {
         b.insert(Dummy::new(format!("{i}"), None));
     }
@@ -265,7 +263,6 @@ fn basic_sync() {
     assert_eq!(a.len(), 16);
     assert_eq!(a.len(), b.len());
 
-    eprintln!(" == Phase 2 ==");
     for i in 16..32 {
         a.insert(Dummy::new(format!("{i}"), None));
     }
@@ -277,7 +274,6 @@ fn basic_sync() {
     assert_eq!(a.len(), 32);
     assert_eq!(a.len(), b.len());
 
-    eprintln!(" == Phase 3 ==");
     for i in 32..256 {
         a.insert(Dummy::new(format!("{i}"), None));
     }
@@ -285,6 +281,18 @@ fn basic_sync() {
     eprintln!("Rounds: {}, Messages: {}", rounds, messages);
     assert!(rounds < 96);
     assert!(messages < 512);
+    assert_eq!(a.hash_tip(), b.hash_tip());
+    assert_eq!(a.len(), 256);
+    assert_eq!(a.len(), b.len());
+
+    a.remote_drop("b");
+    a.remote_add("b".to_string(), None);
+    b.remote_drop("a");
+    b.remote_add("a".to_string(), None);
+    let (rounds, messages) = sync_stores(&mut a, &mut b, 128);
+    eprintln!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(rounds < 4);
+    assert!(messages < 32);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), 256);
     assert_eq!(a.len(), b.len());
@@ -305,7 +313,6 @@ fn complicated_sync() {
     assert!(messages < 4);
     assert_eq!(a.hash_tip(), b.hash_tip());
 
-    eprintln!(" == Phase 0 ==");
     for i in 1..16 {
         a.insert(Dummy::new(format!("{i}"), None));
     }
@@ -471,7 +478,7 @@ fn complicated_sync_many_many() {
     );
     let (rounds, messages) = sync_many_direct(&mut stores, 32);
     eprintln!("Rounds: {}, Messages: {}", rounds, messages);
-    assert!(messages < 256*256);
+    assert!(messages < 256 * 256);
     assert_eq!(
         stores.get_mut("a").unwrap().hash_tip(),
         stores.get_mut("b").unwrap().hash_tip()
