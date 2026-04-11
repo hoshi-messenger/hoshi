@@ -13,11 +13,11 @@ pub struct Dummy {
 }
 
 impl Store for Dummy {
-    fn msg_id(&self) -> Uuid {
+    fn id(&self) -> Uuid {
         self.id
     }
 
-    fn msg_hash(&self) -> Hash {
+    fn hash(&self) -> Hash {
         blake3::Hasher::new()
             .update(self.id.as_bytes())
             .update(self.text.as_bytes())
@@ -30,6 +30,14 @@ impl Dummy {
         let id = id.unwrap_or_else(|| Uuid::now_v7());
         Self { id, text }
     }
+}
+
+fn concat_all(a: &mut StoreHead<Dummy>) -> String {
+    a.get_all()
+        .iter()
+        .map(|(_, msg)| msg.text.clone())
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn sync_stores<T: Store>(
@@ -313,11 +321,16 @@ fn complicated_sync() {
     assert!(messages < 4);
     assert_eq!(a.hash_tip(), b.hash_tip());
 
+    let mut full_message: Vec<String> = vec!["0".to_string()];
     for i in 1..16 {
-        a.insert(Dummy::new(format!("{i}"), None));
+        let text = format!("{i}");
+        full_message.push(text.clone());
+        a.insert(Dummy::new(text, None));
     }
     for i in 16..32 {
-        b.insert(Dummy::new(format!("{i}"), None));
+        let text = format!("{i}");
+        full_message.push(text.clone());
+        b.insert(Dummy::new(text, None));
     }
     assert_ne!(a.hash_tip(), b.hash_tip());
     let (rounds, messages) = sync_stores(&mut a, &mut b, 32);
@@ -327,9 +340,12 @@ fn complicated_sync() {
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), 32);
     assert_eq!(a.len(), b.len());
+    assert_eq!(full_message.join(""), concat_all(&mut a));
 
     for i in 32..128 {
-        let msg = Dummy::new(format!("{i}"), None);
+        let text = format!("{i}");
+        full_message.push(text.clone());
+        let msg = Dummy::new(text, None);
         match i & 3 {
             0 => a.insert(msg.clone()),
             1 => b.insert(msg.clone()),
@@ -347,6 +363,7 @@ fn complicated_sync() {
     assert_eq!(a.len(), 128);
     assert_eq!(a.hash_tip(), b.hash_tip());
     assert_eq!(a.len(), b.len());
+    assert_eq!(full_message.join(""), concat_all(&mut a));
 }
 
 #[test]
@@ -424,10 +441,11 @@ fn complicated_sync_many() {
     stores
         .get_mut("a")
         .unwrap()
-        .insert(Dummy::new("5".to_string(), None));
+        .insert(Dummy::new("4".to_string(), None));
     let (rounds, messages) = sync_many_direct(&mut stores, 4);
     eprintln!("Rounds: {}, Messages: {}", rounds, messages);
     assert!(messages < 32);
+    assert_eq!(concat_all(stores.get_mut("a").unwrap()), "01234");
 }
 
 #[test]

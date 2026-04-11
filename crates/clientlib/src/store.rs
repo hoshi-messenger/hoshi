@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub trait Store: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug + Clone {
-    fn msg_id(&self) -> Uuid;
-    fn msg_hash(&self) -> blake3::Hash;
+    fn id(&self) -> Uuid;
+    fn hash(&self) -> blake3::Hash;
 }
 
 pub struct StoreHead<T: Store> {
@@ -96,6 +96,10 @@ impl<T: Store> StoreHead<T> {
         self.messages.get(&uuid)
     }
 
+    pub fn get_all(&self) -> &BTreeMap<Uuid, T> {
+        &self.messages
+    }
+
     pub fn len(&self) -> usize {
         self.messages.len()
     }
@@ -116,7 +120,7 @@ impl<T: Store> StoreHead<T> {
             i = i + 4;
             let msg = &data[i..i + len];
             let msg = rmp_serde::from_slice::<T>(msg)?;
-            map.insert(msg.msg_id(), msg);
+            map.insert(msg.id(), msg);
             i = i + len;
         }
         Ok(map)
@@ -138,7 +142,7 @@ impl<T: Store> StoreHead<T> {
         let Some(cur) = self.messages.get(&uuid) else {
             return None;
         };
-        let cur = cur.msg_hash();
+        let cur = cur.hash();
 
         let mut range = self.messages.range_mut(..uuid);
         let prev = match range.next_back() {
@@ -171,7 +175,7 @@ impl<T: Store> StoreHead<T> {
     }
 
     pub fn insert(&mut self, msg: T) -> bool {
-        let uuid = msg.msg_id();
+        let uuid = msg.id();
         if self.messages.contains_key(&uuid) {
             if cfg!(debug_assertions) {
                 eprintln!("Duplicate insert: {}:{}", self.name, uuid);
@@ -254,7 +258,7 @@ impl<T: Store> StoreHead<T> {
                 if remote.tip == start {
                     let mut last_id: Option<Uuid> = None;
                     for (_, msg) in self.messages.iter().take(8) {
-                        last_id = Some(msg.msg_id());
+                        last_id = Some(msg.id());
                         tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
                     }
                     if let Some(last_id) = last_id {
@@ -263,7 +267,7 @@ impl<T: Store> StoreHead<T> {
                 } else if let Some(uuid) = self.hashes.get_by_right(&remote.tip) {
                     let mut last_id: Option<Uuid> = None;
                     for (_, msg) in self.messages.range(uuid..).skip(1).take(8) {
-                        last_id = Some(msg.msg_id());
+                        last_id = Some(msg.id());
                         tx(remote.key.clone(), HeadCommand::Put(msg.clone()));
                     }
                     if let Some(last_id) = last_id {
