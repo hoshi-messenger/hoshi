@@ -1,8 +1,10 @@
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashMap},
     fs::File,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+    rc::Rc,
     time::{Duration, Instant},
 };
 
@@ -17,12 +19,30 @@ pub trait Store: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debu
     fn hash(&self) -> blake3::Hash;
 }
 
+pub struct StoreWatcher<T: Store> {
+    pub id: Uuid,
+    last_hash: Option<blake3::Hash>,
+    fun: Box<dyn Fn(&BTreeMap<Uuid, T>)>,
+}
+
+pub struct StoreWatcherRef<T: Store> {
+    id: Uuid,
+    watchers: Rc<RefCell<Vec<StoreWatcher<T>>>>,
+}
+
+impl<T: Store> Drop for StoreWatcherRef<T> {
+    fn drop(&mut self) {
+        self.watchers.borrow_mut().retain(|w| w.id != self.id);
+    }
+}
+
 pub struct StoreHead<T: Store> {
     name: String,
     file: Option<BufWriter<File>>,
     messages: BTreeMap<Uuid, T>,
     hashes: BiHashMap<Uuid, blake3::Hash>,
     remotes: HashMap<String, StoreHeadRemote>,
+    watchers: Rc<RefCell<Vec<StoreWatcher<T>>>>,
 }
 
 pub struct StoreHeadRemote {
@@ -53,6 +73,27 @@ pub enum HeadCommand<T: Store> {
     TipSecondary([u8; 32]),
 }
 
+impl<T: Store> StoreWatcher<T> {
+    pub fn new(fun: Box<dyn Fn(&BTreeMap<Uuid, T>)>) -> Self {
+        let id = Uuid::now_v7();
+        Self {
+            id,
+            last_hash: None,
+            fun,
+        }
+    }
+
+    pub fn run(&mut self, tip: blake3::Hash, messages: &BTreeMap<Uuid, T>) {
+        if let Some(hash) = self.last_hash
+            && hash == tip
+        {
+            return;
+        }
+        self.last_hash = Some(tip);
+        (self.fun)(messages);
+    }
+}
+
 impl<T: Store> StoreHead<T> {
     pub fn new(name: String, repo_path: Option<&Path>) -> Self {
         let file = repo_path.clone().map(|p| {
@@ -78,7 +119,35 @@ impl<T: Store> StoreHead<T> {
             messages,
             hashes: BiHashMap::new(),
             remotes: HashMap::new(),
+            watchers: Rc::new(RefCell::new(vec![])),
         }
+    }
+
+    pub fn watcher_add(
+        &mut self,
+        fun: impl Fn(&BTreeMap<Uuid, T>) + 'static,
+    ) -> StoreWatcherRef<T> {
+        let watcher = StoreWatcher::new(Box::new(fun));
+        let id = watcher.id;
+        self.watchers.borrow_mut().push(watcher);
+        self.watcher_run();
+
+        StoreWatcherRef {
+            id,
+            watchers: self.watchers.clone(),
+        }
+    }
+
+    pub fn watcher_run(&mut self) {
+        let tip = self.hash_tip();
+        let messages = &self.messages;
+        for watcher in self.watchers.borrow_mut().iter_mut() {
+            watcher.run(tip, messages);
+        }
+    }
+
+    pub fn watcher_len(&self) -> usize {
+        self.watchers.borrow().len()
     }
 
     pub fn remote_add(&mut self, key: String, tip: Option<blake3::Hash>) {
@@ -207,6 +276,7 @@ impl<T: Store> StoreHead<T> {
         for remote in self.remotes.values_mut() {
             remote.cooldown_until = now.clone();
         }
+        self.watcher_run();
         true
     }
 
@@ -233,7 +303,8 @@ impl<T: Store> StoreHead<T> {
                         .map(|r| r.tip_update_queued = true);
                 }
             }
-        }
+        };
+        self.watcher_run();
     }
 
     pub fn tx(&mut self, mut tx: impl FnMut(String, HeadCommand<T>)) {

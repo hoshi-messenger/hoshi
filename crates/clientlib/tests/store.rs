@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use blake3::Hash;
 use hoshi_clientlib::{HeadCommand, Store, StoreHead};
@@ -514,4 +514,60 @@ fn complicated_sync_many_many() {
         stores.get_mut("z").unwrap().hash_tip()
     );
     assert_eq!(stores.get("z").unwrap().len(), 24);
+}
+
+#[test]
+fn watcher_tests() {
+    let mut a = StoreHead::<Dummy>::new("t".to_string(), None);
+    let mut b = StoreHead::<Dummy>::new("t".to_string(), None);
+
+    let acc = Rc::new(RefCell::new("".to_string()));
+    let watcher = {
+        let acc = acc.clone();
+        a.watcher_add(move |msgs| {
+            let new_acc = msgs
+                .iter()
+                .map(|m| m.1.text.to_string())
+                .collect::<Vec<_>>()
+                .join("");
+            acc.replace(new_acc);
+        })
+    };
+    assert_eq!(a.watcher_len(), 1);
+    assert_eq!(acc.borrow().clone(), "");
+
+    a.insert(Dummy::new("0".to_string(), None));
+    b.insert(Dummy::new("1".to_string(), None));
+    b.insert(Dummy::new("2".to_string(), None));
+    b.insert(Dummy::new("a".to_string(), None));
+    assert_ne!(a.hash_tip(), b.hash_tip());
+    assert_eq!(a.watcher_len(), 1);
+    assert_eq!(acc.borrow().clone(), "0");
+
+    let (rounds, messages) = sync_stores(&mut a, &mut b, 16);
+    eprint!("Rounds: {}, Messages: {}", rounds, messages);
+    assert!(rounds < 8);
+    assert!(messages < 32);
+    assert_eq!(a.hash_tip(), b.hash_tip());
+    assert_eq!(a.watcher_len(), 1);
+    assert_eq!(acc.borrow().clone(), "012a");
+
+    drop(watcher);
+    a.insert(Dummy::new("b".to_string(), None));
+    assert_eq!(a.watcher_len(), 0);
+    assert_eq!(acc.borrow().clone(), "012a");
+
+    let _watcher = {
+        let acc = acc.clone();
+        a.watcher_add(move |msgs| {
+            let new_acc = msgs
+                .iter()
+                .map(|m| m.1.text.to_string())
+                .collect::<Vec<_>>()
+                .join("");
+            acc.replace(new_acc);
+        })
+    };
+    assert_eq!(a.watcher_len(), 1);
+    assert_eq!(acc.borrow().clone(), "012ab");
 }
