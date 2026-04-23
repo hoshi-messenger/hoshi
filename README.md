@@ -119,7 +119,6 @@ Until Hoshi becomes self-hosting there is a [Discord channel](https://discord.gg
 
 - [ ] Allow control plane to sign relay / client certs
 - [ ] Check whether relay / client cert was signed by control plane
-- [ ] Use snow for actual crypto / E2EE
 - [ ] Spaces / Group Chats
 
 ## Backlog
