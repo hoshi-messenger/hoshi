@@ -77,12 +77,33 @@ impl HoshiIdentity {
 
     pub fn make_server_tls_config(&self) -> rustls::ServerConfig {
         ensure_crypto_provider();
-        let (cert_der, key_der) = self.generate_self_signed_cert();
+        let (cert_der, key_der) = self.generate_server_tls_cert();
 
         rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
-            .with_client_cert_verifier(Arc::new(RequireClientCert))
+            .with_client_cert_verifier(Arc::new(RequestClientCert))
             .with_single_cert(vec![cert_der], key_der)
             .expect("server TLS config")
+    }
+
+    fn generate_server_tls_cert(&self) -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
+        let key_pair = rcgen::KeyPair::generate().expect("generate ECDSA P-256 keypair");
+
+        let mut params = rcgen::CertificateParams::new(vec![
+            "localhost".into(),
+            "127.0.0.1".into(),
+            "::1".into(),
+        ])
+        .expect("cert params");
+        params.distinguished_name = rcgen::DistinguishedName::new();
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, self.public_key_hex());
+
+        let cert = params.self_signed(&key_pair).expect("self-sign");
+        let cert_der = CertificateDer::from(cert.der().to_vec());
+        let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+
+        (cert_der, key_der)
     }
 }
 
@@ -143,9 +164,9 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAllServerCerts {
 }
 
 #[derive(Debug)]
-struct RequireClientCert;
+struct RequestClientCert;
 
-impl rustls::server::danger::ClientCertVerifier for RequireClientCert {
+impl rustls::server::danger::ClientCertVerifier for RequestClientCert {
     fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
         &[]
     }
@@ -182,7 +203,7 @@ impl rustls::server::danger::ClientCertVerifier for RequireClientCert {
     }
 
     fn client_auth_mandatory(&self) -> bool {
-        true
+        false
     }
 }
 

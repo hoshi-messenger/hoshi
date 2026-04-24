@@ -1,84 +1,181 @@
-use axum::{
-    Json,
-    extract::{
-        ConnectInfo, State, WebSocketUpgrade,
-        ws::{Message as WsMessage, WebSocket, rejection::WebSocketUpgradeRejection},
-    },
-    http::{
-        HeaderMap, Method, StatusCode,
-        header::{ACCEPT, USER_AGENT},
-    },
-    response::{Html, IntoResponse},
-};
+use std::convert::Infallible;
+
 use futures::{SinkExt, StreamExt};
 use hoshi_clientlib::HoshiEnvelope;
+use http_body_util::Full;
+use hyper::{
+    Method, Request, Response, StatusCode, Version,
+    body::{Bytes, Incoming},
+    header::{
+        ACCEPT, CONNECTION, CONTENT_TYPE, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY,
+        SEC_WEBSOCKET_VERSION, UPGRADE, USER_AGENT,
+    },
+    upgrade::Upgraded,
+};
+use hyper_util::rt::TokioIo;
+use tokio_tungstenite::{
+    WebSocketStream,
+    tungstenite::{
+        handshake::derive_accept_key,
+        protocol::{Message as WsMessage, Role},
+    },
+};
 
 use crate::{ServerState, api, connection::HoshiConnection, http::TlsConnectInfo};
 
-#[axum::debug_handler]
-pub async fn index_route(
-    State(state): State<ServerState>,
-    ConnectInfo(conn_info): ConnectInfo<TlsConnectInfo>,
-    method: Method,
-    headers: HeaderMap,
-    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
-) -> impl IntoResponse {
-    match ws {
-        Ok(upgrade) => {
-            let user_agent = headers
-                .get(USER_AGENT)
-                .map(|v| v.to_str().ok())
-                .unwrap_or_default()
-                .unwrap_or_default();
+type Body = Full<Bytes>;
 
-            // Just something to get rid of simple bots
-            if !user_agent.contains("Hoshi") {
-                return StatusCode::UNAUTHORIZED.into_response();
-            }
+pub async fn handle_request(
+    state: ServerState,
+    conn_info: TlsConnectInfo,
+    mut req: Request<Incoming>,
+) -> Result<Response<Body>, Infallible> {
+    if req.uri().path() != "/" {
+        return Ok(empty_response(StatusCode::NOT_FOUND));
+    }
 
-            let Some(client_key) = conn_info.client_public_key else {
-                eprintln!(
-                    "WS: no client certificate presented from {}",
-                    conn_info.remote_addr
-                );
-                return StatusCode::UNAUTHORIZED.into_response();
-            };
+    if is_websocket_upgrade(&req) {
+        return Ok(websocket_response(state, conn_info, &mut req));
+    }
 
-            upgrade.on_upgrade(async move |socket| {
-                handle_ws(state, socket, client_key).await;
-            })
-        }
-        Err(_) => match method {
-            Method::GET => {
-                let accepts_html = headers
-                    .get(ACCEPT)
-                    .and_then(|v| v.to_str().ok())
-                    .map(|v| v.contains("text/html"))
-                    .unwrap_or(false);
-
-                if accepts_html {
-                    relay_status_html(state).await.into_response()
-                } else {
-                    relay_status_json(state).await.into_response()
-                }
-            }
-            _ => StatusCode::METHOD_NOT_ALLOWED.into_response(),
-        },
+    match *req.method() {
+        Method::GET => Ok(relay_status_response(state, &req)),
+        _ => Ok(empty_response(StatusCode::METHOD_NOT_ALLOWED)),
     }
 }
 
-async fn relay_status_html(_state: ServerState) -> impl IntoResponse {
-    Html("<h1>Welcome to the Hoshi relay!</h1>".to_string())
+fn relay_status_response(state: ServerState, req: &Request<Incoming>) -> Response<Body> {
+    let accepts_html = req
+        .headers()
+        .get(ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("text/html"))
+        .unwrap_or(false);
+
+    if accepts_html {
+        response(
+            StatusCode::OK,
+            "text/html; charset=utf-8",
+            "<h1>Welcome to the Hoshi relay!</h1>",
+        )
+    } else {
+        let body = serde_json::to_string(&api::RelayStatusResponse {
+            status: "ok".to_string(),
+            public_key: state.public_key.clone(),
+        })
+        .expect("relay status response serializes");
+        response(StatusCode::OK, "application/json", body)
+    }
 }
 
-async fn relay_status_json(state: ServerState) -> impl IntoResponse {
-    Json(api::RelayStatusResponse {
-        status: "ok".to_string(),
-        public_key: state.public_key.clone(),
-    })
+fn websocket_response(
+    state: ServerState,
+    conn_info: TlsConnectInfo,
+    req: &mut Request<Incoming>,
+) -> Response<Body> {
+    let user_agent = req
+        .headers()
+        .get(USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+
+    // Just something to get rid of simple bots.
+    if !user_agent.contains("Hoshi") {
+        return empty_response(StatusCode::UNAUTHORIZED);
+    }
+
+    let Some(client_key) = conn_info.client_public_key else {
+        eprintln!(
+            "WS: no client certificate presented from {}",
+            conn_info.remote_addr
+        );
+        return empty_response(StatusCode::UNAUTHORIZED);
+    };
+
+    let Some(ws_accept) = req
+        .headers()
+        .get(SEC_WEBSOCKET_KEY)
+        .map(|key| derive_accept_key(key.as_bytes()))
+    else {
+        return empty_response(StatusCode::BAD_REQUEST);
+    };
+
+    let version = req.version();
+    let on_upgrade = hyper::upgrade::on(req);
+    tokio::spawn(async move {
+        match on_upgrade.await {
+            Ok(upgraded) => {
+                let socket =
+                    WebSocketStream::from_raw_socket(TokioIo::new(upgraded), Role::Server, None)
+                        .await;
+                handle_ws(state, socket, client_key).await;
+            }
+            Err(e) => eprintln!("WS upgrade error: {e}"),
+        }
+    });
+
+    let mut res = Response::new(Body::default());
+    *res.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
+    *res.version_mut() = version;
+    res.headers_mut()
+        .insert(CONNECTION, "Upgrade".parse().expect("valid header"));
+    res.headers_mut()
+        .insert(UPGRADE, "websocket".parse().expect("valid header"));
+    res.headers_mut().insert(
+        SEC_WEBSOCKET_ACCEPT,
+        ws_accept.parse().expect("valid websocket accept header"),
+    );
+    res
 }
 
-async fn handle_ws(state: ServerState, socket: WebSocket, client_key: String) {
+fn is_websocket_upgrade(req: &Request<Incoming>) -> bool {
+    let headers = req.headers();
+    req.method() == Method::GET
+        && req.version() >= Version::HTTP_11
+        && headers
+            .get(CONNECTION)
+            .and_then(|h| h.to_str().ok())
+            .map(|h| {
+                h.split([',', ' '])
+                    .any(|part| part.eq_ignore_ascii_case("upgrade"))
+            })
+            .unwrap_or(false)
+        && headers
+            .get(UPGRADE)
+            .and_then(|h| h.to_str().ok())
+            .map(|h| h.eq_ignore_ascii_case("websocket"))
+            .unwrap_or(false)
+        && headers
+            .get(SEC_WEBSOCKET_VERSION)
+            .map(|h| h == "13")
+            .unwrap_or(false)
+}
+
+fn response(
+    status: StatusCode,
+    content_type: &'static str,
+    body: impl Into<Bytes>,
+) -> Response<Body> {
+    let mut res = Response::new(Full::new(body.into()));
+    *res.status_mut() = status;
+    res.headers_mut().insert(
+        CONTENT_TYPE,
+        content_type.parse().expect("valid content type"),
+    );
+    res
+}
+
+fn empty_response(status: StatusCode) -> Response<Body> {
+    let mut res = Response::new(Body::default());
+    *res.status_mut() = status;
+    res
+}
+
+async fn handle_ws(
+    state: ServerState,
+    socket: WebSocketStream<TokioIo<Upgraded>>,
+    client_key: String,
+) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = tokio::sync::mpsc::channel::<HoshiEnvelope>(64);
 
@@ -97,7 +194,7 @@ async fn handle_ws(state: ServerState, socket: WebSocket, client_key: String) {
             msg = stream.next() => {
                 match msg {
                     Some(Ok(WsMessage::Binary(bytes))) => {
-                        if let Ok(envelope) = rmp_serde::from_slice::<HoshiEnvelope>(&bytes) {
+                        if let Ok(envelope) = rmp_serde::from_slice::<HoshiEnvelope>(bytes.as_ref()) {
                             println!("WS: [{client_key}] -> [{}] ({} bytes)", envelope.recipient, bytes.len());
                             if let Some(conns) = state.connections.get(&envelope.recipient) {
                                 println!("WS: routing to {} connection(s) for [{}]", conns.len(), envelope.recipient);
@@ -121,7 +218,7 @@ async fn handle_ws(state: ServerState, socket: WebSocket, client_key: String) {
                     Some(envelope) => {
                         println!("WS: forwarding envelope to [{client_key}] ({} payload bytes)", envelope.payload.len());
                         if let Ok(bytes) = rmp_serde::to_vec(&envelope) {
-                            if sink.send(WsMessage::Binary(bytes.into())).await.is_err() {
+                            if sink.send(WsMessage::binary(bytes)).await.is_err() {
                                 break;
                             }
                         }
