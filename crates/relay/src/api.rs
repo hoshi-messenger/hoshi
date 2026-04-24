@@ -4,4 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct RelayStatusResponse {
     pub status: String,
     pub public_key: String,
+    pub connected_clients: u64,
+    pub messages_per_second: u64,
+    pub bytes_per_second: u64,
 }

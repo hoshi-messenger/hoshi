@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hoshi Relay Status</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #ffffff;
+      --panel: #ffffff;
+      --text: #000000;
+      --muted: #555555;
+      --line: #000000;
+      --grid: #dddddd;
+      --border: #000000;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #000000;
+        --panel: #000000;
+        --text: #ffffff;
+        --muted: #bbbbbb;
+        --line: #ffffff;
+        --grid: #333333;
+        --border: #ffffff;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Menlo, monospace;
+    }
+
+    main {
+      width: min(1120px, 100%);
+      margin: 0 auto;
+      padding: 18px;
+    }
+
+    header,
+    section {
+      border: 1px solid var(--border);
+      background: var(--panel);
+    }
+
+    header {
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(1.35rem, 2vw, 2rem);
+    }
+
+    .public-key {
+      overflow-wrap: anywhere;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    table {
+      width: 100%;
+      margin-top: 14px;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    th,
+    td {
+      padding: 7px 0;
+      border-top: 1px solid var(--border);
+      text-align: left;
+    }
+
+    td {
+      text-align: right;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .charts {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+    }
+
+    section {
+      padding: 12px;
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+      color: var(--muted);
+    }
+
+    .chart-wrap {
+      position: relative;
+      width: 100%;
+      height: 200px;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    @media (max-width: 560px) {
+      main {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Hoshi relay</h1>
+      <div class="public-key">Public key: <span id="public-key"><!--PUBLIC_KEY--></span></div>
+      <table aria-label="Latest relay sample">
+        <tbody>
+          <tr><th>Connected clients</th><td id="connected-clients"><!--CONNECTED_CLIENTS--></td></tr>
+          <tr><th>Messages per second</th><td id="messages-per-second"><!--MESSAGES_PER_SECOND--></td></tr>
+          <tr><th>Bytes per second</th><td id="bytes-per-second"><!--BYTES_PER_SECOND--></td></tr>
+        </tbody>
+      </table>
+      <div class="public-key" id="sample-status">Waiting for next sample...</div>
+    </header>
+
+    <div class="charts">
+      <section>
+        <h2>Connected clients</h2>
+        <div class="chart-wrap">
+          <canvas id="connected-clients-chart"></canvas>
+        </div>
+      </section>
+      <section>
+        <h2>Messages per second</h2>
+        <div class="chart-wrap">
+          <canvas id="messages-per-second-chart"></canvas>
+        </div>
+      </section>
+      <section>
+        <h2>Network throughput</h2>
+        <div class="chart-wrap">
+          <canvas id="bytes-per-second-chart"></canvas>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
+  <script>
+    const maxSamples = 120;
+    const samples = {
+      connected_clients: [],
+      messages_per_second: [],
+      bytes_per_second: [],
+    };
+
+    const charts = {
+      connected_clients: {
+        canvas: document.getElementById("connected-clients-chart"),
+        label: "Connected clients",
+        formatTick: formatIntegerTick,
+      },
+      messages_per_second: {
+        canvas: document.getElementById("messages-per-second-chart"),
+        label: "Messages per second",
+        formatTick: formatIntegerTick,
+      },
+      bytes_per_second: {
+        canvas: document.getElementById("bytes-per-second-chart"),
+        label: "Throughput",
+        formatTick: formatThroughput,
+      },
+    };
+
+    function formatThroughput(bytesPerSecond) {
+      const value = Number(bytesPerSecond) || 0;
+      if (value >= 1024 * 1024) {
+        return `${Math.round(value / (1024 * 1024))} MB/s`;
+      }
+      if (value >= 1024) {
+        return `${Math.round(value / 1024)} KB/s`;
+      }
+      return `${Math.round(value)} B/s`;
+    }
+
+    function formatIntegerTick(value) {
+      return Number.isInteger(value) ? String(value) : "";
+    }
+
+    function paddedBounds(min, max) {
+      if (min === max) {
+        const padding = Math.max(1, Math.ceil(Math.abs(max) * 0.1));
+        return {
+          min: Math.max(0, min - padding),
+          max: max + padding,
+        };
+      }
+
+      const span = max - min;
+      const padding = Math.max(1, Math.ceil(span * 0.1));
+      return {
+        min: Math.max(0, min - padding),
+        max: max + padding,
+      };
+    }
+
+    function chartColors() {
+      const styles = getComputedStyle(document.documentElement);
+      return {
+        line: styles.getPropertyValue("--line").trim(),
+        grid: styles.getPropertyValue("--grid").trim(),
+        text: styles.getPropertyValue("--text").trim(),
+      };
+    }
+
+    function createChart(config) {
+      const colors = chartColors();
+      return new Chart(config.canvas, {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [{
+            label: config.label,
+            data: [],
+            borderColor: colors.line,
+            backgroundColor: "transparent",
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.2,
+          }],
+        },
+        options: {
+          animation: false,
+          maintainAspectRatio: false,
+          responsive: true,
+          plugins: {
+            legend: {
+              display: true,
+              labels: { color: colors.text },
+            },
+          },
+          scales: {
+            x: {
+              display: false,
+              grid: { color: colors.grid },
+              ticks: { color: colors.text },
+            },
+            y: {
+              beginAtZero: false,
+              grid: { color: colors.grid },
+              grace: "10%",
+              ticks: {
+                color: colors.text,
+                callback: config.formatTick,
+              },
+            },
+          },
+        },
+      });
+    }
+
+    for (const config of Object.values(charts)) {
+      config.chart = createChart(config);
+    }
+
+    function pushSample(name, value) {
+      const series = samples[name];
+      series.push(Number(value) || 0);
+      if (series.length > maxSamples) {
+        series.shift();
+      }
+    }
+
+    function updateChart(name) {
+      const { chart } = charts[name];
+      const series = samples[name];
+      if (series.length === 0) {
+        return;
+      }
+
+      const min = Math.min(...series);
+      const max = Math.max(...series);
+      const bounds = paddedBounds(min, max);
+
+      chart.data.labels = series.map((_, index) => index + 1);
+      chart.data.datasets[0].data = series;
+      chart.options.scales.y.min = bounds.min;
+      chart.options.scales.y.max = bounds.max;
+      chart.update("none");
+    }
+
+    function updateText(data) {
+      document.getElementById("connected-clients").textContent = data.connected_clients;
+      document.getElementById("messages-per-second").textContent = data.messages_per_second;
+      document.getElementById("bytes-per-second").textContent = formatThroughput(data.bytes_per_second);
+      document.getElementById("sample-status").textContent = `Last sample: ${new Date().toLocaleTimeString()}`;
+    }
+
+    async function fetchSample() {
+      try {
+        const response = await fetch("/", { headers: { "Accept": "application/json" } });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        updateText(data);
+        pushSample("connected_clients", data.connected_clients);
+        pushSample("messages_per_second", data.messages_per_second);
+        pushSample("bytes_per_second", data.bytes_per_second);
+        updateChart("connected_clients");
+        updateChart("messages_per_second");
+        updateChart("bytes_per_second");
+      } catch (error) {
+        document.getElementById("sample-status").textContent = `Last sample failed: ${error.message}`;
+      }
+    }
+
+    fetchSample();
+    setInterval(fetchSample, 1000);
+    addEventListener("resize", () => {
+      for (const config of Object.values(charts)) {
+        config.chart.resize();
+      }
+    });
+  </script>
+</body>
+</html>

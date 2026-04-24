@@ -7,7 +7,7 @@ use hoshi_relay::api;
 use reqwest::StatusCode;
 use reqwest::header::USER_AGENT;
 use reqwest_websocket::{Message, RequestBuilderExt};
-use tokio::time::{Duration, timeout};
+use tokio::time::{Duration, sleep, timeout};
 
 #[tokio::test]
 async fn basic_http_routes() {
@@ -29,6 +29,9 @@ async fn basic_http_routes() {
             .await
             .expect("healthz json body");
         assert_eq!(body.status, "ok");
+        assert_eq!(body.connected_clients, 0);
+        assert_eq!(body.messages_per_second, 0);
+        assert_eq!(body.bytes_per_second, 0);
     })
     .await;
 }
@@ -48,6 +51,11 @@ async fn status_allows_clients_without_certificates() {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response.text().await.expect("status body");
         assert!(body.contains("Hoshi relay"));
+        assert!(body.contains(&state.public_key));
+        assert!(!body.contains("<!--PUBLIC_KEY-->"));
+        assert!(!body.contains("<!--CONNECTED_CLIENTS-->"));
+        assert!(!body.contains("<!--MESSAGES_PER_SECOND-->"));
+        assert!(!body.contains("<!--BYTES_PER_SECOND-->"));
     })
     .await;
 }
@@ -119,11 +127,15 @@ async fn websocket_routes_envelopes_by_client_certificate_key() {
             .await
             .expect("sender websocket");
 
+        let stats = wait_for_stats(state.config.uri(), |stats| stats.connected_clients == 2).await;
+        assert_eq!(stats.connected_clients, 2);
+
         let envelope = HoshiEnvelope {
             recipient: recipient_identity.public_key_hex(),
             payload: b"hello recipient".to_vec(),
         };
         let bytes = rmp_serde::to_vec(&envelope).expect("serialize envelope");
+        let sent_bytes = bytes.len() as u64;
 
         sender_ws
             .send(Message::Binary(bytes))
@@ -143,6 +155,13 @@ async fn websocket_routes_envelopes_by_client_certificate_key() {
             rmp_serde::from_slice::<HoshiEnvelope>(&bytes).expect("deserialize routed envelope");
         assert_eq!(routed.recipient, recipient_identity.public_key_hex());
         assert_eq!(routed.payload, b"hello recipient");
+
+        let stats = wait_for_stats(state.config.uri(), |stats| {
+            stats.messages_per_second >= 1 && stats.bytes_per_second >= sent_bytes
+        })
+        .await;
+        assert!(stats.messages_per_second >= 1);
+        assert!(stats.bytes_per_second >= sent_bytes);
     })
     .await;
 }
@@ -159,4 +178,32 @@ fn browser_style_client() -> reqwest::Client {
         .danger_accept_invalid_certs(true)
         .build()
         .expect("browser-style test client")
+}
+
+async fn wait_for_stats(
+    base_uri: String,
+    predicate: impl Fn(&api::RelayStatusResponse) -> bool,
+) -> api::RelayStatusResponse {
+    let client = browser_style_client();
+    let mut last = None;
+
+    for _ in 0..40 {
+        let stats = client
+            .get(&base_uri)
+            .send()
+            .await
+            .expect("stats response")
+            .json::<api::RelayStatusResponse>()
+            .await
+            .expect("stats body");
+
+        if predicate(&stats) {
+            return stats;
+        }
+
+        last = Some(stats);
+        sleep(Duration::from_millis(100)).await;
+    }
+
+    panic!("stats condition was not met; last stats: {last:?}");
 }
