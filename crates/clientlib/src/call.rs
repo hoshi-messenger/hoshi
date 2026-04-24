@@ -236,6 +236,20 @@ impl Call {
             .collect()
     }
 
+    pub fn all_other_parties_hung_up(&self, own_key: &str) -> bool {
+        let mut saw_other_party = false;
+        for party in &self.parties {
+            if party.contact.public_key == own_key {
+                continue;
+            }
+            saw_other_party = true;
+            if !matches!(party.status, CallPartyStatus::HungUp) {
+                return false;
+            }
+        }
+        saw_other_party
+    }
+
     pub fn get_call_label<F>(&self, own_contact: Contact, display_name: F) -> String
     where
         F: Fn(&str) -> String,

@@ -17,6 +17,7 @@ use crate::{
 const CONTACTS_HEAD: &str = "local_contacts";
 const CONFIG_HEAD: &str = "local_config";
 const CONFIG_KEY_PUBLIC_KEY: &str = "public_key";
+const CALL_END_GRACE_SECS: u64 = 5;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ChatRecord {
@@ -632,6 +633,22 @@ impl HoshiClient {
             .collect()
     }
 
+    fn close_call_if_remote_ended(&self, call: &mut Call) {
+        let my_key = self.public_key();
+        let own_status = call.get_status(&my_key);
+        if matches!(own_status, None | Some(CallPartyStatus::HungUp)) {
+            return;
+        }
+        if !call.all_other_parties_hung_up(&my_key) {
+            return;
+        }
+
+        call.add_event(CallPartyEvent::new(my_key.clone(), CallPartyStatus::HungUp));
+        for msg in self.build_call_state_messages(call) {
+            self.net.send(msg);
+        }
+    }
+
     pub fn public_key(&self) -> String {
         self.public_key.borrow().clone()
     }
@@ -754,6 +771,7 @@ impl HoshiClient {
                     for call in self.calls.borrow_mut().iter_mut() {
                         if call.id() == &call_id {
                             call.merge_events(events.clone(), &contact_lookup);
+                            self.close_call_if_remote_ended(call);
                             found = true;
                             break;
                         }
@@ -761,32 +779,36 @@ impl HoshiClient {
                     if !found {
                         let mut call = Call::from_events(call_id.clone(), events, &contact_lookup);
                         let own_status = call.get_status(&self.public_key());
-                        if matches!(own_status, Some(CallPartyStatus::Invited)) {
-                            call.add_event(CallPartyEvent::new(
-                                self.public_key(),
-                                CallPartyStatus::Ringing,
-                            ));
-                            let msgs = self.build_call_state_messages(&call);
-                            if let Some(interface) = self.audio_interface.borrow().as_ref() {
-                                if let Ok(stream) = interface.create(self, &call) {
-                                    call.set_audio(Some(stream));
+                        match own_status {
+                            Some(CallPartyStatus::Invited) => {
+                                call.add_event(CallPartyEvent::new(
+                                    self.public_key(),
+                                    CallPartyStatus::Ringing,
+                                ));
+                                let msgs = self.build_call_state_messages(&call);
+                                if let Some(interface) = self.audio_interface.borrow().as_ref() {
+                                    if let Ok(stream) = interface.create(self, &call) {
+                                        call.set_audio(Some(stream));
+                                    }
+                                }
+                                self.calls.borrow_mut().push(call);
+                                for msg in msgs {
+                                    self.net.send(msg);
                                 }
                             }
-                            self.calls.borrow_mut().push(call);
-                            for msg in msgs {
-                                self.net.send(msg);
+                            Some(CallPartyStatus::Ringing | CallPartyStatus::Active) => {
+                                if let Some(interface) = self.audio_interface.borrow().as_ref() {
+                                    if let Ok(stream) = interface.create(self, &call) {
+                                        call.set_audio(Some(stream));
+                                    }
+                                }
+                                self.calls.borrow_mut().push(call);
                             }
-                        } else {
-                            let event =
-                                CallPartyEvent::new(self.public_key(), CallPartyStatus::HungUp);
-                            self.net.send(HoshiMessage::new(
-                                self.public_key(),
-                                net_msg.from_key.clone(),
-                                HoshiPayload::UpdateCallState {
-                                    call_id,
-                                    events: vec![event],
-                                },
-                            ));
+                            Some(CallPartyStatus::HungUp) | None => {
+                                // Ignore malformed or stale call updates that do not currently
+                                // involve us instead of injecting a synthetic HungUp event back
+                                // into the call state.
+                            }
                         }
                     }
                     self.calls_changed();
@@ -880,15 +902,29 @@ impl HoshiClient {
         }
 
         let before = self.calls.borrow().len();
+        let own_key = self.public_key();
         self.calls.borrow_mut().retain_mut(|call| {
             msgs += 1;
             call.step(self);
 
-            let own_status = call.get_status(&self.public_key());
-            if own_status.is_none() || matches!(own_status, Some(CallPartyStatus::HungUp)) {
-                false
-            } else {
-                call.active_or_ringing_party_count() > 1
+            let own_status = call.get_status(&own_key);
+            match own_status {
+                None | Some(CallPartyStatus::HungUp) => false,
+                Some(_) => {
+                    let has_other_party = call
+                        .non_hungup_party_keys()
+                        .into_iter()
+                        .any(|key| key != own_key);
+                    if has_other_party {
+                        call.call_ended = None;
+                        true
+                    } else if call.all_other_parties_hung_up(&own_key) {
+                        false
+                    } else {
+                        let ended_at = call.call_ended.get_or_insert_with(std::time::Instant::now);
+                        ended_at.elapsed().as_secs() < CALL_END_GRACE_SECS
+                    }
+                }
             }
         });
         if self.calls.borrow().len() != before {
