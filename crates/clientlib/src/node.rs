@@ -1,3 +1,5 @@
+use anyhow::{Result, anyhow};
+
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     if s.len() % 2 != 0 {
         return None;
@@ -14,6 +16,24 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 pub fn user_path(public_key: &str) -> String {
     format!("/user/{public_key}")
+}
+
+pub fn normalize_public_key(public_key: &str) -> String {
+    public_key.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+pub fn validate_public_key_hex(public_key: &str) -> Result<()> {
+    let public_key = normalize_public_key(public_key);
+    let Some(bytes) = hex_decode(&public_key) else {
+        return Err(anyhow!("public key must be valid hex"));
+    };
+    if bytes.len() != 32 {
+        return Err(anyhow!(
+            "public key must be 32 bytes / 64 hex chars, got {} hex chars",
+            public_key.len()
+        ));
+    }
+    Ok(())
 }
 
 /// Compute the chat path for a 1:1 chat between two public keys.

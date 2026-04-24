@@ -37,15 +37,21 @@ pub(super) fn show_add_contact_dialog(
 
     public_key_entry.set_activates_default(true);
 
+    let error_parent = parent.clone();
     dialog.connect_response(None, move |dialog, response| {
         if response == "add" {
-            let public_key = public_key_entry.text().to_string();
+            let public_key = hoshi_clientlib::normalize_public_key(&public_key_entry.text());
             if !public_key.is_empty() {
                 let contact = hoshi_clientlib::Contact::new(public_key);
-                state
-                    .client
-                    .contact_upsert(contact)
-                    .expect("Couldn't add contact");
+                if state.client.contact_upsert(contact).is_err() {
+                    let error_dialog = adw::AlertDialog::new(
+                        Some("Couldn't add contact"),
+                        Some("Incorrect public key, please double check."),
+                    );
+                    error_dialog.add_response("ok", "OK");
+                    error_dialog.present(Some(&error_parent));
+                    return;
+                }
             }
         }
         dialog.close();

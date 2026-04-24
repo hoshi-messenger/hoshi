@@ -17,7 +17,7 @@ use crate::{
     chat_path,
     hoshi_net_client::{HoshiMessage, HoshiPayload},
     identity::HoshiIdentity,
-    peer_key_from_chat_path, user_path,
+    normalize_public_key, peer_key_from_chat_path, user_path, validate_public_key_hex,
 };
 
 const CONTACTS_HEAD: &str = "local_contacts";
@@ -341,7 +341,7 @@ impl HoshiClient {
             chat_head.remote_add(contact.public_key.clone(), None);
             chats.insert(chat_id, chat_head);
 
-            profile_heads
+            let profile_head = profile_heads
                 .entry(user_path(&contact.public_key))
                 .or_insert_with(|| {
                     StoreHead::<ProfileRecord>::new(
@@ -349,6 +349,9 @@ impl HoshiClient {
                         Some(&store_dir),
                     )
                 });
+            if contact.contact_type != ContactType::Blocked {
+                profile_head.remote_add(contact.public_key.clone(), None);
+            }
         }
 
         if let Some(own_profile) = profile_heads.get_mut(&user_path(&public_key)) {
@@ -918,6 +921,8 @@ impl HoshiClient {
     }
 
     pub fn set_public_key(&self, key: String) -> Result<()> {
+        let key = normalize_public_key(&key);
+        validate_public_key_hex(&key)?;
         self.net.disconnect_all();
         self.config_head.borrow_mut().insert(ConfigRecord {
             id: Uuid::now_v7(),
@@ -1049,7 +1054,9 @@ impl HoshiClient {
     }
 
     /// Update or Insert a particular Contact, currently only persists locally.
-    pub fn contact_upsert(&self, contact: Contact) -> Result<()> {
+    pub fn contact_upsert(&self, mut contact: Contact) -> Result<()> {
+        contact.public_key = normalize_public_key(&contact.public_key);
+        validate_public_key_hex(&contact.public_key)?;
         self.contacts_head.borrow().queue(ContactRecord {
             id: Uuid::now_v7(),
             public_key: contact.public_key.clone(),
@@ -1069,6 +1076,13 @@ impl HoshiClient {
         let own_path = user_path(&self.public_key());
         {
             let mut profiles = self.profile_heads.borrow_mut();
+            if let Some(head) = profiles.get_mut(&user_path(&contact.public_key)) {
+                if contact.contact_type == ContactType::Blocked {
+                    head.remote_drop(&contact.public_key);
+                } else {
+                    head.remote_add(contact.public_key.clone(), None);
+                }
+            }
             let head = profiles.entry(own_path.clone()).or_insert_with(|| {
                 StoreHead::<ProfileRecord>::new(own_path.clone(), Some(&self.store_dir))
             });
@@ -1092,6 +1106,9 @@ impl HoshiClient {
         let own_path = user_path(&self.public_key());
         let mut profiles = self.profile_heads.borrow_mut();
         if let Some(head) = profiles.get_mut(&own_path) {
+            head.remote_drop(public_key);
+        }
+        if let Some(head) = profiles.get_mut(&user_path(public_key)) {
             head.remote_drop(public_key);
         }
 

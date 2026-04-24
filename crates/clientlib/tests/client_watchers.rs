@@ -8,6 +8,37 @@ fn key(byte: u8) -> String {
 }
 
 #[test]
+fn invalid_contact_key_returns_error() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let client = HoshiClient::new(Some(dir.path().to_path_buf()))?;
+
+    let err = client
+        .contact_upsert(Contact::new("abcd".repeat(15) + "ab"))
+        .expect_err("invalid public key should be rejected");
+    assert!(err.to_string().contains("public key"));
+    Ok(())
+}
+
+#[test]
+fn contact_key_whitespace_is_ignored() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let client = HoshiClient::new(Some(dir.path().to_path_buf()))?;
+    let normalized = key(0x12);
+    let spaced = format!(
+        "  {} {} \n{}  ",
+        &normalized[..16],
+        &normalized[16..32],
+        &normalized[32..]
+    );
+
+    client.contact_upsert(Contact::new(spaced))?;
+    client.step();
+
+    assert!(client.contact_get(&normalized).is_some());
+    Ok(())
+}
+
+#[test]
 fn unified_watch_handles_unsubscribe_on_drop() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let client = HoshiClient::new(Some(dir.path().to_path_buf()))?;

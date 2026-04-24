@@ -47,13 +47,20 @@ pub fn view_settings(state: AppState) {
 
     {
         let state = state.clone();
+        let parent = state.win.clone();
         key_row.connect_apply(move |row| {
-            let new_key = row.text().to_string();
+            let new_key = hoshi_clientlib::normalize_public_key(&row.text());
             if !new_key.is_empty() {
-                state
-                    .client
-                    .set_public_key(new_key)
-                    .expect("Couldn't save public key");
+                if let Err(_err) = state.client.set_public_key(new_key.clone()) {
+                    let dialog = adw::AlertDialog::new(
+                        Some("Couldn't save public key"),
+                        Some("Incorrect public key, please double check."),
+                    );
+                    dialog.add_response("ok", "OK");
+                    dialog.present(Some(&parent));
+                } else {
+                    row.set_text(&new_key);
+                }
             }
         });
     }
