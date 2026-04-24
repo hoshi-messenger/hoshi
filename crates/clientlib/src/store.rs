@@ -40,6 +40,7 @@ pub struct StoreHead<T: Store> {
     name: String,
     file: Option<BufWriter<File>>,
     messages: BTreeMap<Uuid, T>,
+    pending: RefCell<Vec<T>>,
     hashes: BiHashMap<Uuid, blake3::Hash>,
     remotes: HashMap<String, StoreHeadRemote>,
     watchers: Rc<RefCell<Vec<StoreWatcher<T>>>>,
@@ -117,6 +118,7 @@ impl<T: Store> StoreHead<T> {
             name,
             file,
             messages,
+            pending: RefCell::new(vec![]),
             hashes: BiHashMap::new(),
             remotes: HashMap::new(),
             watchers: Rc::new(RefCell::new(vec![])),
@@ -173,6 +175,10 @@ impl<T: Store> StoreHead<T> {
         self.messages.len()
     }
 
+    pub fn queue(&self, msg: T) {
+        self.pending.borrow_mut().push(msg);
+    }
+
     fn hash_start(&self) -> blake3::Hash {
         blake3::Hasher::new()
             .update(self.name.as_bytes())
@@ -181,12 +187,22 @@ impl<T: Store> StoreHead<T> {
 
     fn load_messages(path: PathBuf) -> Result<BTreeMap<Uuid, T>> {
         let mut map = BTreeMap::new();
-        let data = std::fs::read(path)?;
+        let data = std::fs::read(&path)?;
         let mut i = 0;
-        while i + 4 < data.len() {
+        while i + 4 <= data.len() {
             let len = &data[i..i + 4].try_into()?;
             let len = u32::from_le_bytes(*len) as usize;
             i = i + 4;
+            if i + len > data.len() {
+                if cfg!(debug_assertions) {
+                    eprintln!(
+                        "Ignoring torn final record in StoreHead file {} at byte {}",
+                        path.display(),
+                        i - 4,
+                    );
+                }
+                break;
+            }
             let msg = &data[i..i + len];
             let msg = rmp_serde::from_slice::<T>(msg)?;
             map.insert(msg.id(), msg);
@@ -243,16 +259,9 @@ impl<T: Store> StoreHead<T> {
         Some(cur)
     }
 
-    pub fn insert(&mut self, msg: T) -> bool {
-        let uuid = msg.id();
-        if self.messages.contains_key(&uuid) {
-            if cfg!(debug_assertions) {
-                eprintln!("Duplicate insert: {}:{}", self.name, uuid);
-            }
-            return false;
-        }
+    fn write_message(&mut self, msg: &T) {
         if let Some(file) = self.file.as_mut() {
-            match rmp_serde::encode::to_vec(&msg) {
+            match rmp_serde::encode::to_vec(msg) {
                 Ok(encoded) => {
                     let len = (encoded.len() as u32).to_le_bytes();
                     file.write_all(&len).expect("Couldn't write len");
@@ -267,6 +276,23 @@ impl<T: Store> StoreHead<T> {
                 }
             }
         }
+    }
+
+    fn flush_file(&mut self) {
+        if let Some(file) = self.file.as_mut() {
+            file.flush().expect("Couldn't flush StoreHead file");
+        }
+    }
+
+    fn insert_apply(&mut self, msg: T) -> bool {
+        let uuid = msg.id();
+        if self.messages.contains_key(&uuid) {
+            if cfg!(debug_assertions) {
+                eprintln!("Duplicate insert: {}:{}", self.name, uuid);
+            }
+            return false;
+        }
+        self.write_message(&msg);
         self.messages.insert(uuid, msg);
         // invalidate cached hashes for uuid and everything after
         self.hashes.retain(|id, _| id < &uuid);
@@ -276,8 +302,31 @@ impl<T: Store> StoreHead<T> {
         for remote in self.remotes.values_mut() {
             remote.cooldown_until = now.clone();
         }
+        true
+    }
+
+    pub fn insert(&mut self, msg: T) -> bool {
+        if !self.insert_apply(msg) {
+            return false;
+        }
+        self.flush_file();
         self.watcher_run();
         true
+    }
+
+    pub fn step(&mut self) -> usize {
+        let pending = std::mem::take(self.pending.get_mut());
+        let mut inserted = 0;
+        for msg in pending {
+            if self.insert_apply(msg) {
+                inserted += 1;
+            }
+        }
+        if inserted > 0 {
+            self.flush_file();
+            self.watcher_run();
+        }
+        inserted
     }
 
     pub fn rx(&mut self, from: &str, cmd: HeadCommand<T>) {
@@ -289,6 +338,7 @@ impl<T: Store> StoreHead<T> {
         };
 
         remote.cooldown_until = Instant::now();
+        let mut changed = false;
         match cmd {
             HeadCommand::Tip(tip) => {
                 remote.tip = blake3::Hash::from_bytes(tip);
@@ -297,14 +347,18 @@ impl<T: Store> StoreHead<T> {
                 remote.tip_secondary = blake3::Hash::from_bytes(tip);
             }
             HeadCommand::Put(msg) => {
-                if self.insert(msg) {
+                if self.insert_apply(msg) {
                     self.remotes
                         .get_mut(from)
                         .map(|r| r.tip_update_queued = true);
+                    self.flush_file();
+                    changed = true;
                 }
             }
         };
-        self.watcher_run();
+        if changed {
+            self.watcher_run();
+        }
     }
 
     pub fn tx(&mut self, mut tx: impl FnMut(String, HeadCommand<T>)) {

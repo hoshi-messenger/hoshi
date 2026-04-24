@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fs::OpenOptions, io::Write, rc::Rc};
 
 use blake3::Hash;
 use hoshi_clientlib::{HeadCommand, Store, StoreHead};
@@ -229,6 +229,30 @@ fn head_persistence() {
     let mut head = StoreHead::<Dummy>::new("a".to_string(), Some(tmp.path()));
     assert_eq!(head.len(), 100);
     assert_eq!(hash, head.hash_tip());
+}
+
+#[test]
+fn head_persistence_ignores_torn_tail() {
+    let tmp = tempdir().unwrap();
+    let mut head = StoreHead::<Dummy>::new("a".to_string(), Some(tmp.path()));
+    let msg = Dummy::new("1".to_string(), None);
+    head.insert(msg.clone());
+    let hash = head.hash_tip();
+    drop(head);
+
+    let torn = Dummy::new("2".to_string(), None);
+    let encoded = rmp_serde::to_vec(&torn).unwrap();
+    let len = (encoded.len() as u32).to_le_bytes();
+    let path = tmp.path().join("a.hoshi");
+    let mut file = OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(&len).unwrap();
+    file.write_all(&encoded[..encoded.len() / 2]).unwrap();
+    file.flush().unwrap();
+
+    let mut head = StoreHead::<Dummy>::new("a".to_string(), Some(tmp.path()));
+    assert_eq!(head.len(), 1);
+    assert_eq!(head.get(msg.id).unwrap().text, "1");
+    assert_eq!(head.hash_tip(), hash);
 }
 
 #[test]
@@ -570,4 +594,40 @@ fn watcher_tests() {
     };
     assert_eq!(a.watcher_len(), 1);
     assert_eq!(acc.borrow().clone(), "012ab");
+}
+
+#[test]
+fn queue_batches_notifications() {
+    let mut head = StoreHead::<Dummy>::new("t".to_string(), None);
+    let acc = Rc::new(RefCell::new(String::new()));
+    let runs = Rc::new(RefCell::new(0usize));
+    let _watcher = {
+        let acc = acc.clone();
+        let runs = runs.clone();
+        head.watcher_add(move |msgs| {
+            *runs.borrow_mut() += 1;
+            let new_acc = msgs
+                .iter()
+                .map(|m| m.1.text.to_string())
+                .collect::<Vec<_>>()
+                .join("");
+            acc.replace(new_acc);
+        })
+    };
+    assert_eq!(*runs.borrow(), 1);
+    assert_eq!(acc.borrow().as_str(), "");
+
+    head.queue(Dummy::new("0".to_string(), None));
+    head.queue(Dummy::new("1".to_string(), None));
+    head.queue(Dummy::new("2".to_string(), None));
+    assert_eq!(head.len(), 0);
+    assert_eq!(*runs.borrow(), 1);
+
+    assert_eq!(head.step(), 3);
+    assert_eq!(head.len(), 3);
+    assert_eq!(acc.borrow().as_str(), "012");
+    assert_eq!(*runs.borrow(), 2);
+
+    assert_eq!(head.step(), 0);
+    assert_eq!(*runs.borrow(), 2);
 }
