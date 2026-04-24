@@ -36,7 +36,7 @@ fn main() -> Result<()> {
     };
 
     let active_calls = RefCell::new(0);
-    client.calls_watch(move |client, calls| {
+    let _calls_watch = client.calls_watch(move |client, calls| {
         let public_key = client.public_key();
         for call in calls.iter() {
             if matches!(call.get_status(&public_key), Some(CallPartyStatus::Ringing)) {

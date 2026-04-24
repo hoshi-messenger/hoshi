@@ -154,7 +154,7 @@ pub fn init_call_banner(state: AppState) {
     let revealer_map: RefCell<HashMap<String, CallBanner>> = RefCell::new(HashMap::new());
 
     let watcher_state = state.clone();
-    state.client.calls_watch(move |_, calls| {
+    let watch = state.client.calls_watch(move |_, calls| {
         let mut revealer_map = revealer_map.borrow_mut();
 
         for call in calls.iter() {
@@ -175,5 +175,9 @@ pub fn init_call_banner(state: AppState) {
                 true
             }
         });
+    });
+    let watch = Rc::new(RefCell::new(Some(watch)));
+    state.win.connect_destroy(move |_| {
+        let _ = watch.borrow_mut().take();
     });
 }

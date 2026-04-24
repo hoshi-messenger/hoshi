@@ -1,6 +1,12 @@
-use std::{cell::RefCell, collections::HashMap, fs, path::Path, path::PathBuf, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -87,40 +93,74 @@ struct ConfigRecord {
     value: String,
 }
 
+type ContactWatchFn = Rc<dyn Fn(&HoshiClient, &HashMap<String, Contact>)>;
+type MessageWatchFn = Rc<dyn Fn(&HoshiClient, &str, &HashMap<String, ChatMessage>)>;
+type CallWatchFn = Rc<dyn Fn(&HoshiClient, &Vec<Call>)>;
+
 struct ContactWatcher {
     id: Uuid,
-    fun: Box<dyn Fn(&HoshiClient, &HashMap<String, Contact>)>,
+    fun: ContactWatchFn,
 }
 
-pub struct HoshiContactsWatcherRef {
-    id: Uuid,
-    watchers: Rc<RefCell<Vec<ContactWatcher>>>,
+pub struct HoshiWatchRef {
+    cleanup: Option<Box<dyn FnMut()>>,
 }
 
-impl Drop for HoshiContactsWatcherRef {
+impl HoshiWatchRef {
+    fn new(cleanup: impl FnMut() + 'static) -> Self {
+        Self {
+            cleanup: Some(Box::new(cleanup)),
+        }
+    }
+}
+
+impl Drop for HoshiWatchRef {
     fn drop(&mut self) {
-        self.watchers
-            .borrow_mut()
-            .retain(|watcher| watcher.id != self.id);
+        if let Some(mut cleanup) = self.cleanup.take() {
+            cleanup();
+        }
     }
 }
 
 struct MessageWatcher {
     id: Uuid,
     filter: String,
-    fun: Box<dyn Fn(&HoshiClient, &str, &HashMap<String, ChatMessage>)>,
+    fun: MessageWatchFn,
 }
 
-pub struct HoshiMessagesWatcherRef {
+struct CallWatcher {
     id: Uuid,
-    watchers: Rc<RefCell<Vec<MessageWatcher>>>,
+    fun: CallWatchFn,
 }
 
-impl Drop for HoshiMessagesWatcherRef {
-    fn drop(&mut self) {
-        self.watchers
-            .borrow_mut()
-            .retain(|watcher| watcher.id != self.id);
+#[derive(Default)]
+struct StepChanges {
+    contacts_changed: bool,
+    profiles_changed: bool,
+    changed_chat_ids: HashSet<String>,
+}
+
+impl StepChanges {
+    fn note_contacts(&mut self) {
+        self.contacts_changed = true;
+    }
+
+    fn note_profiles(&mut self) {
+        self.profiles_changed = true;
+    }
+
+    fn note_chat(&mut self, chat_id: String) {
+        self.changed_chat_ids.insert(chat_id);
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.contacts_changed |= other.contacts_changed;
+        self.profiles_changed |= other.profiles_changed;
+        self.changed_chat_ids.extend(other.changed_chat_ids);
+    }
+
+    fn has_contact_view_changes(&self) -> bool {
+        self.contacts_changed || self.profiles_changed
     }
 }
 
@@ -161,13 +201,18 @@ fn write_identity_files(path: &Path, identity: &HoshiIdentity) -> Result<()> {
 
 fn load_or_create_identity(path: &Path) -> Result<HoshiIdentity> {
     if let Some(seed_hex) = read_seed_hex(path) {
-        let seed_bytes: Vec<u8> = (0..seed_hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&seed_hex[i..i + 2], 16).unwrap())
-            .collect();
-        let seed: [u8; 32] = seed_bytes
-            .try_into()
-            .expect("ed25519_seed must be 32 bytes");
+        if seed_hex.len() != 64 {
+            return Err(anyhow!(
+                "invalid ed25519 seed length in {}: expected 64 hex chars, got {}",
+                path.display(),
+                seed_hex.len()
+            ));
+        }
+        let mut seed = [0_u8; 32];
+        for (idx, offset) in (0..seed_hex.len()).step_by(2).enumerate() {
+            seed[idx] = u8::from_str_radix(&seed_hex[offset..offset + 2], 16)
+                .with_context(|| format!("invalid ed25519 seed hex in {}", path.display()))?;
+        }
         Ok(HoshiIdentity::from_seed(seed))
     } else {
         let identity = HoshiIdentity::generate();
@@ -244,24 +289,26 @@ pub struct HoshiClient {
     pub(crate) audio_interface: RefCell<Option<Box<dyn AudioInterface>>>,
 
     calls: RefCell<Vec<Call>>,
-    calls_watchers: RefCell<Vec<Box<dyn Fn(&Self, &Vec<Call>)>>>,
+    calls_watchers: Rc<RefCell<Vec<CallWatcher>>>,
 
     contacts_head: RefCell<StoreHead<ContactRecord>>,
-    contacts: RefCell<HashMap<String, Contact>>,
     contacts_watchers: Rc<RefCell<Vec<ContactWatcher>>>,
 
     config_head: RefCell<StoreHead<ConfigRecord>>,
     profile_heads: RefCell<HashMap<String, StoreHead<ProfileRecord>>>,
-    aliases: RefCell<HashMap<String, String>>,
 
     chats: RefCell<HashMap<String, StoreHead<ChatRecord>>>,
-    messages: RefCell<HashMap<String, HashMap<String, ChatMessage>>>,
     messages_watchers: Rc<RefCell<Vec<MessageWatcher>>>,
 }
 
 impl HoshiClient {
     pub fn new(data_dir: Option<PathBuf>) -> Result<Self> {
-        let data_dir = data_dir.unwrap_or_else(|| dirs::home_dir().unwrap().join(".hoshi"));
+        let data_dir = match data_dir {
+            Some(path) => path,
+            None => dirs::home_dir()
+                .map(|path| path.join(".hoshi"))
+                .ok_or_else(|| anyhow!("couldn't determine home directory for hoshi data dir"))?,
+        };
         fs::create_dir_all(&data_dir)?;
 
         let store_dir = data_dir.join("stores");
@@ -312,27 +359,6 @@ impl HoshiClient {
             }
         }
 
-        let aliases = profile_heads
-            .iter()
-            .filter_map(|(path, head)| {
-                let public_key = path.strip_prefix("/user/")?;
-                Some((public_key.to_string(), alias_from_head(head)?))
-            })
-            .collect::<HashMap<_, _>>();
-
-        let messages = chats
-            .iter()
-            .filter_map(|(chat_id, head)| {
-                let peer_key = peer_key_from_chat_path(&public_key, chat_id)?;
-                let msgs = chat_messages_from_head(head, &public_key, &peer_key);
-                if msgs.is_empty() {
-                    None
-                } else {
-                    Some((chat_id.clone(), msgs))
-                }
-            })
-            .collect::<HashMap<_, _>>();
-
         let relay_list = if cfg!(debug_assertions) {
             vec!["wss://127.0.0.1:2800/".into()]
         } else {
@@ -346,15 +372,12 @@ impl HoshiClient {
             public_key: RefCell::new(public_key),
             audio_interface: RefCell::new(None),
             calls: RefCell::new(vec![]),
-            calls_watchers: RefCell::new(vec![]),
+            calls_watchers: Rc::new(RefCell::new(vec![])),
             contacts_head: RefCell::new(contacts_head),
-            contacts: RefCell::new(contacts),
             contacts_watchers: Rc::new(RefCell::new(vec![])),
             config_head: RefCell::new(config_head),
             profile_heads: RefCell::new(profile_heads),
-            aliases: RefCell::new(aliases),
             chats: RefCell::new(chats),
-            messages: RefCell::new(messages),
             messages_watchers: Rc::new(RefCell::new(vec![])),
         })
     }
@@ -366,8 +389,7 @@ impl HoshiClient {
     fn ensure_own_profile_head(&self) {
         let head_name = user_path(&self.public_key());
         let contact_keys = self
-            .contacts
-            .borrow()
+            .contacts_snapshot()
             .values()
             .filter(|c| c.contact_type != ContactType::Blocked)
             .map(|c| c.public_key.clone())
@@ -404,6 +426,28 @@ impl HoshiClient {
             });
     }
 
+    fn contacts_snapshot(&self) -> HashMap<String, Contact> {
+        let contacts_head = self.contacts_head.borrow();
+        contacts_from_head(&contacts_head)
+    }
+
+    fn chat_messages_snapshot(&self, chat_id: &str) -> Option<HashMap<String, ChatMessage>> {
+        let chats = self.chats.borrow();
+        let head = chats.get(chat_id)?;
+        let our_key = self.public_key();
+        let peer_key = peer_key_from_chat_path(&our_key, chat_id)?;
+        let messages = chat_messages_from_head(head, &our_key, &peer_key);
+        if messages.is_empty() {
+            None
+        } else {
+            Some(messages)
+        }
+    }
+
+    fn chat_ids(&self) -> Vec<String> {
+        self.chats.borrow().keys().cloned().collect()
+    }
+
     fn sync_head<T: Store>(&self, head_name: &str, head: &mut StoreHead<T>) {
         let from_key = self.public_key();
         let head_name = head_name.to_string();
@@ -421,74 +465,249 @@ impl HoshiClient {
         });
     }
 
-    fn rebuild_views(&self) {
-        let new_contacts = {
-            let contacts_head = self.contacts_head.borrow();
-            contacts_from_head(&contacts_head)
-        };
+    fn drain_pending_heads(&self) -> StepChanges {
+        let mut changes = StepChanges::default();
 
-        let new_aliases = {
-            let profiles = self.profile_heads.borrow();
-            profiles
-                .iter()
-                .filter_map(|(path, head)| {
-                    let public_key = path.strip_prefix("/user/")?;
-                    Some((public_key.to_string(), alias_from_head(head)?))
-                })
-                .collect::<HashMap<_, _>>()
-        };
+        if self.contacts_head.borrow_mut().step() > 0 {
+            changes.note_contacts();
+        }
+        let _ = self.config_head.borrow_mut().step();
+        {
+            let mut profiles = self.profile_heads.borrow_mut();
+            for head in profiles.values_mut() {
+                if head.step() > 0 {
+                    changes.note_profiles();
+                }
+            }
+        }
+        {
+            let mut chats = self.chats.borrow_mut();
+            for (chat_id, head) in chats.iter_mut() {
+                if head.step() > 0 {
+                    changes.note_chat(chat_id.clone());
+                }
+            }
+        }
 
-        let new_messages = {
-            let chats = self.chats.borrow();
-            let our_key = self.public_key();
-            chats
-                .iter()
-                .filter_map(|(chat_id, head)| {
-                    let peer_key = peer_key_from_chat_path(&our_key, chat_id)?;
-                    let msgs = chat_messages_from_head(head, &our_key, &peer_key);
-                    if msgs.is_empty() {
-                        None
-                    } else {
-                        Some((chat_id.clone(), msgs))
+        changes
+    }
+
+    fn sync_store_heads(&self) {
+        {
+            let own_head = user_path(&self.public_key());
+            let mut profiles = self.profile_heads.borrow_mut();
+            for (head_name, head) in profiles.iter_mut() {
+                if head_name == &own_head || head_name.starts_with("/user/") {
+                    self.sync_head(head_name, head);
+                }
+            }
+        }
+        {
+            let mut chats = self.chats.borrow_mut();
+            for (chat_id, head) in chats.iter_mut() {
+                self.sync_head(chat_id, head);
+            }
+        }
+    }
+
+    fn notify_contacts_watchers(&self) {
+        let watchers = self
+            .contacts_watchers
+            .borrow()
+            .iter()
+            .map(|watcher| Rc::clone(&watcher.fun))
+            .collect::<Vec<_>>();
+        if watchers.is_empty() {
+            return;
+        }
+
+        let contacts = self.contacts_snapshot();
+        for watcher in watchers {
+            watcher(self, &contacts);
+        }
+    }
+
+    fn notify_messages_watchers(&self, chat_id: &str) {
+        let watchers = self
+            .messages_watchers
+            .borrow()
+            .iter()
+            .filter(|watcher| watcher.filter.is_empty() || watcher.filter == chat_id)
+            .map(|watcher| Rc::clone(&watcher.fun))
+            .collect::<Vec<_>>();
+        if watchers.is_empty() {
+            return;
+        }
+
+        let Some(messages) = self.chat_messages_snapshot(chat_id) else {
+            return;
+        };
+        for watcher in watchers {
+            watcher(self, chat_id, &messages);
+        }
+    }
+
+    fn notify_all_message_watchers(&self) {
+        for chat_id in self.chat_ids() {
+            self.notify_messages_watchers(&chat_id);
+        }
+    }
+
+    fn notify_calls_watchers(&self) {
+        let watchers = self
+            .calls_watchers
+            .borrow()
+            .iter()
+            .map(|watcher| Rc::clone(&watcher.fun))
+            .collect::<Vec<_>>();
+        if watchers.is_empty() {
+            return;
+        }
+
+        let calls = self.calls.borrow().clone();
+        for watcher in watchers {
+            watcher(self, &calls);
+        }
+    }
+
+    fn process_store_sync(
+        &self,
+        from_key: &str,
+        head_name: String,
+        command: Vec<u8>,
+        changes: &mut StepChanges,
+    ) {
+        if head_name.starts_with("/chat/") {
+            if self.peer_key_for_chat_path(&head_name) != Some(from_key.to_string()) {
+                return;
+            }
+            self.ensure_chat_head(&head_name);
+            if self.contact_get(from_key).is_none() {
+                let _ = self.contact_upsert(Contact::new_unknown(from_key.to_string()));
+            }
+            if let Ok(cmd) = rmp_serde::from_slice::<HeadCommand<ChatRecord>>(&command) {
+                let mut chats = self.chats.borrow_mut();
+                if let Some(head) = chats.get_mut(&head_name)
+                    && head.rx(from_key, cmd)
+                {
+                    changes.note_chat(head_name);
+                }
+            }
+        } else if head_name.starts_with("/user/") {
+            if head_name != user_path(from_key) {
+                return;
+            }
+            self.ensure_profile_head(from_key);
+            if let Ok(cmd) = rmp_serde::from_slice::<HeadCommand<ProfileRecord>>(&command) {
+                let mut profiles = self.profile_heads.borrow_mut();
+                if let Some(head) = profiles.get_mut(&head_name)
+                    && head.rx(from_key, cmd)
+                {
+                    changes.note_profiles();
+                }
+            }
+        }
+    }
+
+    fn process_net_message(&self, net_msg: HoshiMessage, changes: &mut StepChanges) {
+        match net_msg.payload {
+            HoshiPayload::UpdateCallState { call_id, events } => {
+                if self.contact_get(&net_msg.from_key).is_none() {
+                    let _ = self.contact_upsert(Contact::new_unknown(net_msg.from_key.clone()));
+                }
+                let mut found = false;
+                let contact_lookup = |key: &str| -> Contact { self.contact_for(key) };
+                for call in self.calls.borrow_mut().iter_mut() {
+                    if call.id() == &call_id {
+                        call.merge_events(events.clone(), &contact_lookup);
+                        self.close_call_if_remote_ended(call);
+                        found = true;
+                        break;
                     }
-                })
-                .collect::<HashMap<_, _>>()
-        };
-
-        let aliases_changed = {
-            let aliases = self.aliases.borrow();
-            *aliases != new_aliases
-        };
-        if aliases_changed {
-            *self.aliases.borrow_mut() = new_aliases;
-        }
-
-        let contacts_changed = {
-            let contacts = self.contacts.borrow();
-            *contacts != new_contacts
-        };
-        if contacts_changed {
-            *self.contacts.borrow_mut() = new_contacts;
-        }
-        if aliases_changed || contacts_changed {
-            self.contacts_changed();
-        }
-
-        let old_messages = self.messages.borrow().clone();
-        if old_messages != new_messages {
-            *self.messages.borrow_mut() = new_messages.clone();
-            let mut changed_chat_ids = old_messages.keys().cloned().collect::<Vec<_>>();
-            for key in new_messages.keys() {
-                if !changed_chat_ids.contains(key) {
-                    changed_chat_ids.push(key.clone());
+                }
+                if !found {
+                    let mut call = Call::from_events(call_id, events, &contact_lookup);
+                    let own_status = call.get_status(&self.public_key());
+                    match own_status {
+                        Some(CallPartyStatus::Invited) => {
+                            call.add_event(CallPartyEvent::new(
+                                self.public_key(),
+                                CallPartyStatus::Ringing,
+                            ));
+                            let msgs = self.build_call_state_messages(&call);
+                            if let Some(interface) = self.audio_interface.borrow().as_ref()
+                                && let Ok(stream) = interface.create(self, &call)
+                            {
+                                call.set_audio(Some(stream));
+                            }
+                            self.calls.borrow_mut().push(call);
+                            for msg in msgs {
+                                self.net.send(msg);
+                            }
+                        }
+                        Some(CallPartyStatus::Ringing | CallPartyStatus::Active) => {
+                            if let Some(interface) = self.audio_interface.borrow().as_ref()
+                                && let Ok(stream) = interface.create(self, &call)
+                            {
+                                call.set_audio(Some(stream));
+                            }
+                            self.calls.borrow_mut().push(call);
+                        }
+                        Some(CallPartyStatus::HungUp) | None => {}
+                    }
+                }
+                self.notify_calls_watchers();
+            }
+            HoshiPayload::AudioChunk { call_id, chunk } => {
+                for call in self.calls.borrow_mut().iter_mut() {
+                    if call.id() == &call_id {
+                        let own_status = call.get_status(&self.public_key());
+                        if matches!(own_status, Some(CallPartyStatus::Active)) {
+                            call.receive_audio(chunk, &net_msg.from_key);
+                        }
+                        break;
+                    }
                 }
             }
-            for chat_id in changed_chat_ids {
-                if old_messages.get(&chat_id) != new_messages.get(&chat_id) {
-                    self.messages_changed(chat_id);
+            HoshiPayload::StoreSync { head_name, command } => {
+                self.process_store_sync(&net_msg.from_key, head_name, command, changes);
+            }
+            _ => {}
+        }
+    }
+
+    fn step_calls(&self) -> usize {
+        let before = self.calls.borrow().len();
+        let own_key = self.public_key();
+        let mut stepped = 0;
+        self.calls.borrow_mut().retain_mut(|call| {
+            stepped += 1;
+            call.step(self);
+
+            let own_status = call.get_status(&own_key);
+            match own_status {
+                None | Some(CallPartyStatus::HungUp) => false,
+                Some(_) => {
+                    let has_other_party = call
+                        .non_hungup_party_keys()
+                        .into_iter()
+                        .any(|key| key != own_key);
+                    if has_other_party {
+                        call.call_ended = None;
+                        true
+                    } else if call.all_other_parties_hung_up(&own_key) {
+                        false
+                    } else {
+                        let ended_at = call.call_ended.get_or_insert_with(std::time::Instant::now);
+                        ended_at.elapsed().as_secs() < CALL_END_GRACE_SECS
+                    }
                 }
             }
+        });
+        if self.calls.borrow().len() != before {
+            self.notify_calls_watchers();
         }
+        stepped
     }
 
     /// Derive the peer key for a chat path from the XOR hash
@@ -507,22 +726,26 @@ impl HoshiClient {
 
         self.send_call_state(&call);
         self.calls.borrow_mut().push(call);
-        self.calls_changed();
+        self.notify_calls_watchers();
     }
 
-    fn calls_changed(&self) {
-        let calls = self.calls.borrow().clone();
-        for f in self.calls_watchers.borrow().iter() {
-            f(self, &calls);
-        }
-    }
-
-    pub fn calls_watch<F>(&self, f: F)
+    pub fn calls_watch<F>(&self, f: F) -> HoshiWatchRef
     where
         F: Fn(&Self, &Vec<Call>) + 'static,
     {
-        f(self, &self.calls.borrow());
-        self.calls_watchers.borrow_mut().push(Box::new(f));
+        let fun: CallWatchFn = Rc::new(f);
+        let calls = self.calls.borrow().clone();
+        fun(self, &calls);
+
+        let id = Uuid::now_v7();
+        self.calls_watchers.borrow_mut().push(CallWatcher {
+            id,
+            fun: Rc::clone(&fun),
+        });
+        let watchers = Rc::clone(&self.calls_watchers);
+        HoshiWatchRef::new(move || {
+            watchers.borrow_mut().retain(|watcher| watcher.id != id);
+        })
     }
 
     pub fn call_get(&self, call_id: &str) -> Option<Call> {
@@ -571,7 +794,7 @@ impl HoshiClient {
         for msg in msgs {
             self.net.send(msg);
         }
-        self.calls_changed();
+        self.notify_calls_watchers();
         Ok(())
     }
 
@@ -591,7 +814,7 @@ impl HoshiClient {
         for msg in msgs {
             self.net.send(msg);
         }
-        self.calls_changed();
+        self.notify_calls_watchers();
         Ok(())
     }
 
@@ -611,7 +834,7 @@ impl HoshiClient {
         for msg in msgs {
             self.net.send(msg);
         }
-        self.calls_changed();
+        self.notify_calls_watchers();
         Ok(())
     }
 
@@ -682,7 +905,11 @@ impl HoshiClient {
     }
 
     pub fn user_alias(&self, public_key: &str) -> Option<String> {
-        self.aliases.borrow().get(public_key).cloned()
+        let head_name = user_path(public_key);
+        self.profile_heads
+            .borrow()
+            .get(&head_name)
+            .and_then(alias_from_head)
     }
 
     pub fn display_name(&self, public_key: &str) -> String {
@@ -699,240 +926,38 @@ impl HoshiClient {
         });
         *self.public_key.borrow_mut() = key;
         self.ensure_own_profile_head();
-        self.rebuild_views();
+        self.notify_contacts_watchers();
+        self.notify_all_message_watchers();
         Ok(())
     }
 
-    fn contacts_changed(&self) {
-        let watchers = self.contacts_watchers.borrow();
-        for watcher in &*watchers {
-            let contacts = self.contacts.borrow();
-            (watcher.fun)(self, &contacts);
-        }
-    }
-
     pub fn last_message(&self, chat_id: &str) -> Option<ChatMessage> {
-        let messages = self.messages.borrow();
-        messages.get(chat_id)?.values().max().cloned()
-    }
-
-    fn messages_changed(&self, chat_id: String) {
-        let watchers = self.messages_watchers.borrow();
-        for watcher in &*watchers {
-            if watcher.filter.is_empty() || watcher.filter == chat_id {
-                let messages = self.messages.borrow();
-                let messages = messages.get(&chat_id);
-                if let Some(messages) = messages {
-                    (watcher.fun)(self, &chat_id, messages);
-                }
-            }
-        }
+        self.chat_messages_snapshot(chat_id)?
+            .values()
+            .max()
+            .cloned()
     }
 
     /// Main function a client MUST call regularly for the clientlib
     /// to work as expected. It communicates with the various other
     /// threads and updates the internal state as well as fires callbacks.
     pub fn step(&self) -> u32 {
-        let mut store_changed = false;
-
-        if self.contacts_head.borrow_mut().step() > 0 {
-            store_changed = true;
-        }
-        if self.config_head.borrow_mut().step() > 0 {
-            store_changed = true;
-        }
-        {
-            let mut profiles = self.profile_heads.borrow_mut();
-            for head in profiles.values_mut() {
-                if head.step() > 0 {
-                    store_changed = true;
-                }
-            }
-        }
-        {
-            let mut chats = self.chats.borrow_mut();
-            for head in chats.values_mut() {
-                if head.step() > 0 {
-                    store_changed = true;
-                }
-            }
-        }
-
+        let mut changes = self.drain_pending_heads();
         let mut msgs = 0;
         for net_msg in self.net.step() {
             msgs += 1;
-            match net_msg.payload {
-                HoshiPayload::UpdateCallState { call_id, events } => {
-                    if self.contact_get(&net_msg.from_key).is_none() {
-                        let _ = self.contact_upsert(Contact::new_unknown(net_msg.from_key.clone()));
-                    }
-                    let mut found = false;
-                    let contact_lookup = |key: &str| -> Contact { self.contact_for(key) };
-                    for call in self.calls.borrow_mut().iter_mut() {
-                        if call.id() == &call_id {
-                            call.merge_events(events.clone(), &contact_lookup);
-                            self.close_call_if_remote_ended(call);
-                            found = true;
-                            break;
-                        }
-                    }
-                    if !found {
-                        let mut call = Call::from_events(call_id.clone(), events, &contact_lookup);
-                        let own_status = call.get_status(&self.public_key());
-                        match own_status {
-                            Some(CallPartyStatus::Invited) => {
-                                call.add_event(CallPartyEvent::new(
-                                    self.public_key(),
-                                    CallPartyStatus::Ringing,
-                                ));
-                                let msgs = self.build_call_state_messages(&call);
-                                if let Some(interface) = self.audio_interface.borrow().as_ref() {
-                                    if let Ok(stream) = interface.create(self, &call) {
-                                        call.set_audio(Some(stream));
-                                    }
-                                }
-                                self.calls.borrow_mut().push(call);
-                                for msg in msgs {
-                                    self.net.send(msg);
-                                }
-                            }
-                            Some(CallPartyStatus::Ringing | CallPartyStatus::Active) => {
-                                if let Some(interface) = self.audio_interface.borrow().as_ref() {
-                                    if let Ok(stream) = interface.create(self, &call) {
-                                        call.set_audio(Some(stream));
-                                    }
-                                }
-                                self.calls.borrow_mut().push(call);
-                            }
-                            Some(CallPartyStatus::HungUp) | None => {
-                                // Ignore malformed or stale call updates that do not currently
-                                // involve us instead of injecting a synthetic HungUp event back
-                                // into the call state.
-                            }
-                        }
-                    }
-                    self.calls_changed();
-                }
-                HoshiPayload::AudioChunk { call_id, chunk } => {
-                    for call in self.calls.borrow_mut().iter_mut() {
-                        if call.id() == &call_id {
-                            let own_status = call.get_status(&self.public_key());
-                            if matches!(own_status, Some(CallPartyStatus::Active)) {
-                                call.receive_audio(chunk, &net_msg.from_key);
-                            }
-                            break;
-                        }
-                    }
-                }
-                HoshiPayload::StoreSync { head_name, command } => {
-                    if head_name.starts_with("/chat/") {
-                        if self.peer_key_for_chat_path(&head_name) != Some(net_msg.from_key.clone())
-                        {
-                            continue;
-                        }
-                        self.ensure_chat_head(&head_name);
-                        if self.contact_get(&net_msg.from_key).is_none() {
-                            let _ =
-                                self.contact_upsert(Contact::new_unknown(net_msg.from_key.clone()));
-                        }
-                        if let Ok(cmd) = rmp_serde::from_slice::<HeadCommand<ChatRecord>>(&command)
-                        {
-                            let mut chats = self.chats.borrow_mut();
-                            if let Some(head) = chats.get_mut(&head_name)
-                                && head.rx(&net_msg.from_key, cmd)
-                            {
-                                store_changed = true;
-                            }
-                        }
-                    } else if head_name.starts_with("/user/") {
-                        if head_name != user_path(&net_msg.from_key) {
-                            continue;
-                        }
-                        self.ensure_profile_head(&net_msg.from_key);
-                        if let Ok(cmd) =
-                            rmp_serde::from_slice::<HeadCommand<ProfileRecord>>(&command)
-                        {
-                            let mut profiles = self.profile_heads.borrow_mut();
-                            if let Some(head) = profiles.get_mut(&head_name)
-                                && head.rx(&net_msg.from_key, cmd)
-                            {
-                                store_changed = true;
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
+            self.process_net_message(net_msg, &mut changes);
         }
 
-        if self.contacts_head.borrow_mut().step() > 0 {
-            store_changed = true;
-        }
-        {
-            let mut profiles = self.profile_heads.borrow_mut();
-            for head in profiles.values_mut() {
-                if head.step() > 0 {
-                    store_changed = true;
-                }
-            }
-        }
-        {
-            let mut chats = self.chats.borrow_mut();
-            for head in chats.values_mut() {
-                if head.step() > 0 {
-                    store_changed = true;
-                }
-            }
-        }
+        changes.merge(self.drain_pending_heads());
+        self.sync_store_heads();
+        msgs += self.step_calls() as u32;
 
-        {
-            let own_head = user_path(&self.public_key());
-            let mut profiles = self.profile_heads.borrow_mut();
-            for (head_name, head) in profiles.iter_mut() {
-                if head_name == &own_head || head_name.starts_with("/user/") {
-                    self.sync_head(head_name, head);
-                }
-            }
+        if changes.has_contact_view_changes() {
+            self.notify_contacts_watchers();
         }
-        {
-            let mut chats = self.chats.borrow_mut();
-            for (chat_id, head) in chats.iter_mut() {
-                self.sync_head(chat_id, head);
-            }
-        }
-
-        let before = self.calls.borrow().len();
-        let own_key = self.public_key();
-        self.calls.borrow_mut().retain_mut(|call| {
-            msgs += 1;
-            call.step(self);
-
-            let own_status = call.get_status(&own_key);
-            match own_status {
-                None | Some(CallPartyStatus::HungUp) => false,
-                Some(_) => {
-                    let has_other_party = call
-                        .non_hungup_party_keys()
-                        .into_iter()
-                        .any(|key| key != own_key);
-                    if has_other_party {
-                        call.call_ended = None;
-                        true
-                    } else if call.all_other_parties_hung_up(&own_key) {
-                        false
-                    } else {
-                        let ended_at = call.call_ended.get_or_insert_with(std::time::Instant::now);
-                        ended_at.elapsed().as_secs() < CALL_END_GRACE_SECS
-                    }
-                }
-            }
-        });
-        if self.calls.borrow().len() != before {
-            self.calls_changed();
-        }
-
-        if store_changed {
-            self.rebuild_views();
+        for chat_id in changes.changed_chat_ids.iter() {
+            self.notify_messages_watchers(chat_id);
         }
 
         msgs
@@ -960,33 +985,31 @@ impl HoshiClient {
     /// particular chat_id as specified by filter changes, can also
     /// be left empty to get notified about all messages.
     #[inline]
-    pub fn messages_watch<F>(&self, filter: String, f: F) -> HoshiMessagesWatcherRef
+    pub fn messages_watch<F>(&self, filter: String, f: F) -> HoshiWatchRef
     where
         F: Fn(&HoshiClient, &str, &HashMap<String, ChatMessage>) + 'static,
     {
-        {
-            let chats = self.messages.borrow();
-            if filter.is_empty() {
-                for chat_id in chats.keys() {
-                    if let Some(chat) = chats.get(chat_id) {
-                        f(self, chat_id, chat);
-                    }
+        let fun: MessageWatchFn = Rc::new(f);
+        if filter.is_empty() {
+            for chat_id in self.chat_ids() {
+                if let Some(chat) = self.chat_messages_snapshot(&chat_id) {
+                    fun(self, &chat_id, &chat);
                 }
-            } else if let Some(chat) = chats.get(&filter) {
-                f(self, &filter, chat);
             }
+        } else if let Some(chat) = self.chat_messages_snapshot(&filter) {
+            fun(self, &filter, &chat);
         }
 
         let id = Uuid::now_v7();
         self.messages_watchers.borrow_mut().push(MessageWatcher {
             id,
             filter,
-            fun: Box::new(f),
+            fun: Rc::clone(&fun),
         });
-        HoshiMessagesWatcherRef {
-            id,
-            watchers: self.messages_watchers.clone(),
-        }
+        let watchers = Rc::clone(&self.messages_watchers);
+        HoshiWatchRef::new(move || {
+            watchers.borrow_mut().retain(|watcher| watcher.id != id);
+        })
     }
 
     /// Call f with a current snapshot of the current contacts once
@@ -995,33 +1018,34 @@ impl HoshiClient {
     where
         F: FnOnce(&Self, &HashMap<String, Contact>),
     {
-        let contacts = self.contacts.borrow();
+        let contacts = self.contacts_snapshot();
         f(self, &contacts);
     }
 
     /// Use this function so that f gets called whenever a contact changes.
     #[inline]
-    pub fn contacts_watch<F>(&self, f: F) -> HoshiContactsWatcherRef
+    pub fn contacts_watch<F>(&self, f: F) -> HoshiWatchRef
     where
         F: Fn(&HoshiClient, &HashMap<String, Contact>) + 'static,
     {
-        let contacts = self.contacts.borrow();
-        f(self, &contacts);
+        let fun: ContactWatchFn = Rc::new(f);
+        let contacts = self.contacts_snapshot();
+        fun(self, &contacts);
         let id = Uuid::now_v7();
         self.contacts_watchers.borrow_mut().push(ContactWatcher {
             id,
-            fun: Box::new(f),
+            fun: Rc::clone(&fun),
         });
-        HoshiContactsWatcherRef {
-            id,
-            watchers: self.contacts_watchers.clone(),
-        }
+        let watchers = Rc::clone(&self.contacts_watchers);
+        HoshiWatchRef::new(move || {
+            watchers.borrow_mut().retain(|watcher| watcher.id != id);
+        })
     }
 
     /// Lookup a particular public_key in the current snapshot of Contacts
     #[inline]
     pub fn contact_get(&self, public_key: &str) -> Option<Contact> {
-        self.contacts.borrow().get(public_key).cloned()
+        self.contacts_snapshot().get(public_key).cloned()
     }
 
     /// Update or Insert a particular Contact, currently only persists locally.
@@ -1078,7 +1102,7 @@ impl HoshiClient {
 impl std::fmt::Debug for HoshiClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HoshiClient")
-            .field("contacts", &self.contacts)
+            .field("contacts", &self.contacts_snapshot().len())
             .field(
                 "contacts_watchers",
                 &format!("[{} watchers]", self.contacts_watchers.borrow().len()),
