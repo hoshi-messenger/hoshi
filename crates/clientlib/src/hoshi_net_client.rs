@@ -5,7 +5,7 @@ use reqwest::header::USER_AGENT;
 use reqwest_websocket::{Message, RequestBuilderExt};
 use serde::{Deserialize, Serialize};
 
-use crate::{HoshiNode, RelayInfo, audio_chunk::AudioChunk, call::CallPartyEvent};
+use crate::{RelayInfo, audio_chunk::AudioChunk, call::CallPartyEvent};
 
 pub struct HoshiNetClient {
     relay_list: RefCell<Vec<RelayInfo>>,
@@ -245,9 +245,8 @@ pub enum HoshiPayload {
         call_id: String,
         chunk: AudioChunk,
     },
-
-    NodeAdvertise(Vec<(String, Vec<u8>)>),
-    NodePut(HoshiNode),
-    NodeList(String),
-    NodeRequest(String),
+    StoreSync {
+        head_name: String,
+        command: Vec<u8>,
+    },
 }

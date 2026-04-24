@@ -16,7 +16,7 @@ fn main() -> Result<()> {
     let interface = LoopbackInterface::new();
     client.set_audio_interface(Some(Box::new(interface)));
 
-    {
+    let _messages_watch = {
         let msg_queue = msg_queue.clone();
         client.messages_watch("".to_string(), move |client, _filter, msgs| {
             let mut sorted = msgs.values().collect::<Vec<&ChatMessage>>();
@@ -32,8 +32,8 @@ fn main() -> Result<()> {
                 println!("Queing reply to {} with {}", &reply.to, &reply.content);
                 msg_queue.borrow_mut().push(reply);
             }
-        });
-    }
+        })
+    };
 
     let active_calls = RefCell::new(0);
     client.calls_watch(move |client, calls| {
@@ -44,13 +44,13 @@ fn main() -> Result<()> {
                     eprintln!(
                         "Couldn't accept call: {} with parties: {}",
                         call.id(),
-                        call.get_call_label(client.own_contact())
+                        call.get_call_label(client.own_contact(), |key| client.display_name(key))
                     );
                 } else {
                     println!(
                         "Accepted call ({}) from: {}",
                         call.id(),
-                        call.get_call_label(client.own_contact())
+                        call.get_call_label(client.own_contact(), |key| client.display_name(key))
                     );
                 }
             }

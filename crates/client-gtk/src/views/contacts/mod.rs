@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 mod chat;
 mod modals;
 
@@ -264,18 +266,26 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
 
     {
         let rebuild_list = rebuild_list.clone();
-        state.client.contacts_watch(move |_, _| {
+        let watch = state.client.contacts_watch(move |_, _| {
             rebuild_list();
+        });
+        let watch = Rc::new(RefCell::new(Some(watch)));
+        vbox.connect_destroy(move |_| {
+            let _ = watch.borrow_mut().take();
         });
     }
 
     {
         let rebuild_list = rebuild_list.clone();
-        state.client.messages_watch(String::new(), move |_, _, _| {
+        let watch = state.client.messages_watch(String::new(), move |_, _, _| {
             let rebuild_list = rebuild_list.clone();
             glib::idle_add_local_once(move || {
                 rebuild_list();
             });
+        });
+        let watch = Rc::new(RefCell::new(Some(watch)));
+        vbox.connect_destroy(move |_| {
+            let _ = watch.borrow_mut().take();
         });
     }
 

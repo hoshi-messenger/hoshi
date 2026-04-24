@@ -28,13 +28,13 @@ fn main() -> Result<()> {
                     eprintln!(
                         "Couldn't accept call: {} with parties: {}",
                         call.id(),
-                        call.get_call_label(client.own_contact())
+                        call.get_call_label(client.own_contact(), |key| client.display_name(key))
                     );
                 } else {
                     println!(
                         "Accepted call ({}) from: {}",
                         call.id(),
-                        call.get_call_label(client.own_contact())
+                        call.get_call_label(client.own_contact(), |key| client.display_name(key))
                     );
                 }
             }

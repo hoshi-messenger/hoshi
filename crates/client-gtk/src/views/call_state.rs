@@ -89,7 +89,9 @@ impl CallBanner {
                 if revealer.is_child_revealed()
                     && let Some(call) = state.client.call_get(&current_call_id)
                 {
-                    label.set_label(&call.get_call_label(state.client.own_contact()));
+                    label.set_label(&call.get_call_label(state.client.own_contact(), |key| {
+                        state.client.display_name(key)
+                    }));
                     glib::ControlFlow::Continue
                 } else {
                     glib::ControlFlow::Break
@@ -108,7 +110,9 @@ impl CallBanner {
 
     pub fn update(&self, state: &AppState, call: &Call) {
         self.label
-            .set_label(&call.get_call_label(state.client.own_contact()));
+            .set_label(&call.get_call_label(state.client.own_contact(), |key| {
+                state.client.display_name(key)
+            }));
 
         if let Some(status) = call.get_status(&state.client.public_key()) {
             match status {

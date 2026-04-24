@@ -17,10 +17,8 @@ pub use audio_interface::{
 pub use call::{Call, CallPartyStatus};
 pub use chat::ChatMessage;
 pub use contact::{Contact, ContactType};
-pub use hoshi_client::HoshiClient;
+pub use hoshi_client::{HoshiClient, HoshiContactsWatcherRef, HoshiMessagesWatcherRef};
 pub use hoshi_net_client::{HoshiEnvelope, HoshiMessage, HoshiNetClient, HoshiPayload};
-pub use node::{
-    HoshiNode, HoshiNodePayload, NodeStore, chat_path, peer_key_from_chat_path, user_path,
-};
+pub use node::{chat_path, peer_key_from_chat_path, user_path};
 pub use relay::RelayInfo;
 pub use store::{HeadCommand, Store, StoreHead};

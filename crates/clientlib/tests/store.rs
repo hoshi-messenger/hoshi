@@ -56,8 +56,12 @@ fn sync_stores<T: Store>(
     let mut rounds = 0;
     for _i in 0..max_rounds {
         rounds += 1;
-        inbox_a.drain(0..).for_each(|msg| a.rx("b", msg));
-        inbox_b.drain(0..).for_each(|msg| b.rx("a", msg));
+        inbox_a.drain(0..).for_each(|msg| {
+            a.rx("b", msg);
+        });
+        inbox_b.drain(0..).for_each(|msg| {
+            b.rx("a", msg);
+        });
 
         let mut messages_queued = inbox_a.len() + inbox_b.len();
         a.tx(|dest, msg| {
@@ -104,9 +108,9 @@ fn sync_many_direct<T: Store>(
 
         for (key, store) in stores.iter_mut() {
             let inbox = inbox.get_mut(key).unwrap();
-            inbox
-                .drain(0..)
-                .for_each(|(from, msg)| store.rx(&from, msg));
+            inbox.drain(0..).for_each(|(from, msg)| {
+                store.rx(&from, msg);
+            });
         }
 
         let mut messages_queued = 0;

@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::NodeStore;
-
 fn generate_emoji_alias(public_key: &str) -> String {
     const EMOJIS: &[&str] = &[
         "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐸", "🐵",
@@ -20,7 +18,7 @@ fn generate_emoji_alias(public_key: &str) -> String {
     format!("{}{}", first, second)
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContactType {
     Unknown,
     Contact,
@@ -28,10 +26,12 @@ pub enum ContactType {
     Deleted,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contact {
     pub public_key: String,
     pub contact_type: ContactType,
+    // We should store a display_name directly in a contact
+    // pub name: String,
 }
 
 impl Contact {
@@ -49,14 +49,8 @@ impl Contact {
         }
     }
 
-    /// Returns the user-advertised title if available via the node store,
-    /// otherwise falls back to a deterministic emoji alias.
-    pub fn display_name(&self, nodes: Option<&mut NodeStore>) -> String {
-        if let Some(nodes) = nodes {
-            if let Some(title) = nodes.user_alias_get(&self.public_key) {
-                return title;
-            }
-        }
+    /// Returns a deterministic emoji alias derived from the public key.
+    pub fn display_name(&self) -> String {
         generate_emoji_alias(&self.public_key)
     }
 }

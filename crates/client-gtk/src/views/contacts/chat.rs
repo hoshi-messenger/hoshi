@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use adw::{Clamp, NavigationPage, prelude::*};
 use gtk::{Box, Button, DrawingArea, Label, MenuButton, ScrolledWindow, TextView};
 use hoshi_clientlib::{ChatMessage, Contact};
@@ -125,7 +127,7 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
         let chat_id = ChatMessage::calc_chat_id(&state.client.public_key(), &contact.public_key);
         let vbox = vbox.clone().downgrade();
         let scroll = scroll.clone().downgrade();
-        state
+        let watch = state
             .client
             .messages_watch(chat_id, move |_, _chat_id, messages| {
                 let Some(vbox) = vbox.upgrade() else {
@@ -217,6 +219,10 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
                     });
                 }
             });
+        let watch = Rc::new(RefCell::new(Some(watch)));
+        center_box.connect_destroy(move |_| {
+            let _ = watch.borrow_mut().take();
+        });
     }
     {
         let state = state.clone();

@@ -236,7 +236,10 @@ impl Call {
             .collect()
     }
 
-    pub fn get_call_label(&self, own_contact: Contact) -> String {
+    pub fn get_call_label<F>(&self, own_contact: Contact, display_name: F) -> String
+    where
+        F: Fn(&str) -> String,
+    {
         let other_parties: Vec<&CallParty> = self
             .parties
             .iter()
@@ -246,9 +249,13 @@ impl Call {
         let names: Vec<String> = other_parties
             .iter()
             .map(|p| match p.status {
-                CallPartyStatus::Invited => format!("{} (dialing)", p.contact.display_name(None)),
-                CallPartyStatus::Ringing => format!("{} (ringing)", p.contact.display_name(None)),
-                _ => p.contact.display_name(None),
+                CallPartyStatus::Invited => {
+                    format!("{} (dialing)", display_name(&p.contact.public_key))
+                }
+                CallPartyStatus::Ringing => {
+                    format!("{} (ringing)", display_name(&p.contact.public_key))
+                }
+                _ => display_name(&p.contact.public_key),
             })
             .collect();
 

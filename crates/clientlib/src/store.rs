@@ -19,6 +19,27 @@ pub trait Store: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debu
     fn hash(&self) -> blake3::Hash;
 }
 
+fn file_name_for_head(name: &str) -> String {
+    if name.bytes().all(|b| {
+        matches!(
+            b,
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'_'
+        )
+    }) {
+        return format!("{name}.hoshi");
+    }
+
+    let mut escaped = String::new();
+    for b in name.bytes() {
+        if matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'_') {
+            escaped.push(char::from(b));
+        } else {
+            escaped.push_str(&format!("_{b:02x}"));
+        }
+    }
+    format!("{escaped}.hoshi")
+}
+
 pub struct StoreWatcher<T: Store> {
     pub id: Uuid,
     last_hash: Option<blake3::Hash>,
@@ -98,7 +119,7 @@ impl<T: Store> StoreWatcher<T> {
 impl<T: Store> StoreHead<T> {
     pub fn new(name: String, repo_path: Option<&Path>) -> Self {
         let file = repo_path.clone().map(|p| {
-            let p = p.join(format!("{name}.hoshi"));
+            let p = p.join(file_name_for_head(&name));
             BufWriter::new(
                 File::options()
                     .append(true)
@@ -109,7 +130,7 @@ impl<T: Store> StoreHead<T> {
         });
         let messages = repo_path
             .map(|p| {
-                let p = p.join(format!("{name}.hoshi"));
+                let p = p.join(file_name_for_head(&name));
                 Self::load_messages(p).expect("Couldn't load local StoreHead")
             })
             .unwrap_or_default();
@@ -329,7 +350,7 @@ impl<T: Store> StoreHead<T> {
         inserted
     }
 
-    pub fn rx(&mut self, from: &str, cmd: HeadCommand<T>) {
+    pub fn rx(&mut self, from: &str, cmd: HeadCommand<T>) -> bool {
         if !self.remotes.contains_key(from) {
             self.remote_add(from.to_string(), None);
         };
@@ -359,6 +380,7 @@ impl<T: Store> StoreHead<T> {
         if changed {
             self.watcher_run();
         }
+        changed
     }
 
     pub fn tx(&mut self, mut tx: impl FnMut(String, HeadCommand<T>)) {
