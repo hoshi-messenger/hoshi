@@ -335,6 +335,21 @@ fn basic_sync() {
 }
 
 #[test]
+fn explicit_tip_request_queues_initial_tip() {
+    let mut head = StoreHead::<Dummy>::new("t".to_string(), None);
+    head.remote_add_with_tip_request("peer".to_string(), None);
+
+    let mut commands = Vec::new();
+    head.tx(|dest, command| {
+        commands.push((dest, command));
+    });
+
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].0, "peer");
+    assert!(matches!(commands[0].1, HeadCommand::Tip(_)));
+}
+
+#[test]
 fn complicated_sync() {
     // Here we test some slightly more complicated sync scenarios, mainly by
     // making sure that if both a and b have new messages the other doesn't know

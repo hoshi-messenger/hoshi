@@ -305,7 +305,7 @@ impl HoshiClient {
                     )
                 });
             if contact.contact_type != ContactType::Blocked {
-                profile_head.remote_add(contact.public_key.clone(), None);
+                profile_head.remote_add_with_tip_request(contact.public_key.clone(), None);
             }
         }
 
@@ -564,7 +564,11 @@ impl HoshiClient {
                 changes.note_chat(head_name);
             }
         } else if head_name.starts_with("/user/") {
-            if head_name != user_path(from_key) {
+            let own_key = self.public_key();
+            let is_owner_sync = head_name == user_path(from_key);
+            let is_request_for_own_profile = head_name == user_path(&own_key)
+                && matches!(&command, HeadCommand::Tip(_) | HeadCommand::TipSecondary(_));
+            if !is_owner_sync && !is_request_for_own_profile {
                 return;
             }
             if let HeadCommand::Put(record) = &command
@@ -572,7 +576,11 @@ impl HoshiClient {
             {
                 return;
             }
-            self.ensure_profile_head(from_key);
+            if is_owner_sync {
+                self.ensure_profile_head(from_key);
+            } else {
+                self.ensure_profile_head(&own_key);
+            }
             let mut profiles = self.profile_heads.borrow_mut();
             if let Some(head) = profiles.get_mut(&head_name)
                 && head.rx(from_key, command)
@@ -1072,7 +1080,7 @@ impl HoshiClient {
                 if contact.contact_type == ContactType::Blocked {
                     head.remote_drop(&contact.public_key);
                 } else {
-                    head.remote_add(contact.public_key.clone(), None);
+                    head.remote_add_with_tip_request(contact.public_key.clone(), None);
                 }
             }
             let head = profiles.entry(own_path.clone()).or_insert_with(|| {
@@ -1120,5 +1128,75 @@ impl std::fmt::Debug for HoshiClient {
                 &format!("[{} watchers]", self.contacts_watchers.borrow().len()),
             )
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn added_contact_can_request_and_receive_profile_immediately() -> Result<()> {
+        let dir_a = tempfile::tempdir()?;
+        let dir_b = tempfile::tempdir()?;
+        let client_a = HoshiClient::new(Some(dir_a.path().to_path_buf()))?;
+        let client_b = HoshiClient::new(Some(dir_b.path().to_path_buf()))?;
+        let key_a = client_a.public_key();
+        let key_b = client_b.public_key();
+
+        client_b.set_user_alias("Bob");
+        client_b.step();
+
+        client_a.contact_upsert(Contact::new(key_b.clone()))?;
+
+        let profile_requests = {
+            let mut profiles = client_a.profile_heads.borrow_mut();
+            let head = profiles
+                .get_mut(&user_path(&key_b))
+                .expect("contact profile head should exist");
+            let mut commands = Vec::new();
+            head.tx(|dest, command| commands.push((dest, command)));
+            commands
+        };
+        assert!(
+            profile_requests
+                .iter()
+                .any(|(dest, command)| dest == &key_b && matches!(command, HeadCommand::Tip(_))),
+            "adding a contact should queue an initial profile tip request"
+        );
+
+        let mut changes = StepChanges::default();
+        for (_, command) in profile_requests {
+            client_b.process_store_sync(&key_a, user_path(&key_b), command, &mut changes);
+        }
+
+        let profile_responses = {
+            let mut profiles = client_b.profile_heads.borrow_mut();
+            let head = profiles
+                .get_mut(&user_path(&key_b))
+                .expect("own profile head should exist");
+            let mut commands = Vec::new();
+            head.tx(|dest, command| commands.push((dest, command)));
+            commands
+        };
+        assert!(
+            profile_responses.iter().any(|(dest, command)| {
+                dest == &key_a
+                    && matches!(
+                        command,
+                        HeadCommand::Put(record)
+                            if matches!(record.record.payload, HoshiPayload::Title { .. })
+                    )
+            }),
+            "profile owner should push profile records after a tip request"
+        );
+
+        let mut changes = StepChanges::default();
+        for (_, command) in profile_responses {
+            client_a.process_store_sync(&key_b, user_path(&key_b), command, &mut changes);
+        }
+
+        assert_eq!(client_a.display_name(&key_b), "Bob");
+        Ok(())
     }
 }

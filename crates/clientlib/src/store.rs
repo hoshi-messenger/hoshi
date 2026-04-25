@@ -180,6 +180,13 @@ impl<T: Store> StoreHead<T> {
             .or_insert_with(move || StoreHeadRemote::new(key, tip));
     }
 
+    pub fn remote_add_with_tip_request(&mut self, key: String, tip: Option<blake3::Hash>) {
+        self.remote_add(key.clone(), tip);
+        if let Some(remote) = self.remotes.get_mut(&key) {
+            remote.tip_update_queued = true;
+        }
+    }
+
     pub fn remote_drop(&mut self, key: &str) {
         self.remotes.remove(key);
     }

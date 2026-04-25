@@ -52,6 +52,9 @@ impl HoshiRecord {
 
 impl HoshiSignedRecord {
     pub fn sign(record: HoshiRecord, identity: &HoshiIdentity) -> anyhow::Result<Self> {
+        if record.from != identity.public_key_hex() {
+            anyhow::bail!("record author must match signing identity");
+        }
         let bytes = signing_bytes(&record)?;
         Ok(Self {
             record,
