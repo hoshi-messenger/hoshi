@@ -39,6 +39,35 @@ fn contact_key_whitespace_is_ignored() -> Result<()> {
 }
 
 #[test]
+fn set_public_key_rejects_key_that_does_not_match_identity() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let client = HoshiClient::new(Some(dir.path().to_path_buf()))?;
+
+    let err = client
+        .set_public_key(key(0x99))
+        .expect_err("public key should have to match loaded identity");
+
+    assert!(err.to_string().contains("loaded identity"));
+    Ok(())
+}
+
+#[test]
+fn message_upsert_rejects_forged_sender() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let client = HoshiClient::new(Some(dir.path().to_path_buf()))?;
+    let peer_key = key(0x22);
+    client.contact_upsert(Contact::new(peer_key.clone()))?;
+
+    let msg = ChatMessage::create(peer_key, client.public_key(), "forged".to_string());
+    let err = client
+        .message_upsert(msg)
+        .expect_err("message sender should have to match client public key");
+
+    assert!(err.to_string().contains("sender"));
+    Ok(())
+}
+
+#[test]
 fn unified_watch_handles_unsubscribe_on_drop() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let client = HoshiClient::new(Some(dir.path().to_path_buf()))?;

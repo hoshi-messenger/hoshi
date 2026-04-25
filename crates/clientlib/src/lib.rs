@@ -23,6 +23,6 @@ pub use hoshi_net_client::{HoshiEnvelope, HoshiMessage, HoshiNetClient, HoshiNet
 pub use node::{
     chat_path, normalize_public_key, peer_key_from_chat_path, user_path, validate_public_key_hex,
 };
-pub use record::{HoshiPayload, HoshiRecord};
+pub use record::{HoshiPayload, HoshiRecord, HoshiSignedRecord};
 pub use relay::RelayInfo;
 pub use store::{HeadCommand, Store, StoreHead};

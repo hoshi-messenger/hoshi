@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use ed25519_dalek::{SigningKey, pkcs8::EncodePrivateKey};
+use ed25519_dalek::{
+    Signature, Signer, SigningKey, Verifier, VerifyingKey, pkcs8::EncodePrivateKey,
+};
 use rand_core::OsRng;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
@@ -40,6 +42,18 @@ impl HoshiIdentity {
             .iter()
             .map(|b| format!("{:02x}", b))
             .collect()
+    }
+
+    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.signing_key.sign(message).to_bytes()
+    }
+
+    pub fn verify(public_key_hex: &str, message: &[u8], signature: &[u8; 64]) -> bool {
+        let Some(public_key) = decode_public_key(public_key_hex) else {
+            return false;
+        };
+        let signature = Signature::from_bytes(signature);
+        public_key.verify(message, &signature).is_ok()
     }
 
     pub fn generate_self_signed_cert(&self) -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
@@ -105,6 +119,17 @@ impl HoshiIdentity {
 
         (cert_der, key_der)
     }
+}
+
+fn decode_public_key(public_key_hex: &str) -> Option<VerifyingKey> {
+    if public_key_hex.len() != 64 {
+        return None;
+    }
+    let mut bytes = [0_u8; 32];
+    for (idx, offset) in (0..public_key_hex.len()).step_by(2).enumerate() {
+        bytes[idx] = u8::from_str_radix(&public_key_hex[offset..offset + 2], 16).ok()?;
+    }
+    VerifyingKey::from_bytes(&bytes).ok()
 }
 
 /// Extract the Ed25519 public key hex from a DER-encoded X.509 certificate.

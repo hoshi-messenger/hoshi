@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     AudioInterface, Call, ChatMessage, Contact, ContactType, HeadCommand, HoshiNetClient,
-    HoshiRecord, StoreHead,
+    HoshiRecord, HoshiSignedRecord, StoreHead,
     call::{CallPartyEvent, CallPartyStatus},
     chat_path,
     hoshi_net_client::{HoshiMessage, HoshiNetPayload},
@@ -140,10 +140,11 @@ fn load_or_create_identity(path: &Path) -> Result<HoshiIdentity> {
     }
 }
 
-fn config_get(head: &StoreHead<HoshiRecord>, key: &str) -> Option<String> {
+fn config_get(head: &StoreHead<HoshiSignedRecord>, key: &str) -> Option<String> {
     head.get_all()
         .values()
-        .filter_map(|entry| match &entry.payload {
+        .filter(|entry| entry.verify())
+        .filter_map(|entry| match &entry.record.payload {
             HoshiPayload::Config {
                 key: entry_key,
                 value,
@@ -153,13 +154,16 @@ fn config_get(head: &StoreHead<HoshiRecord>, key: &str) -> Option<String> {
         .last()
 }
 
-fn contacts_from_head(head: &StoreHead<HoshiRecord>) -> HashMap<String, Contact> {
+fn contacts_from_head(head: &StoreHead<HoshiSignedRecord>) -> HashMap<String, Contact> {
     let mut contacts = HashMap::new();
     for record in head.get_all().values() {
+        if !record.verify() {
+            continue;
+        }
         let HoshiPayload::Contact {
             public_key,
             contact_type,
-        } = &record.payload
+        } = &record.record.payload
         else {
             continue;
         };
@@ -174,10 +178,12 @@ fn contacts_from_head(head: &StoreHead<HoshiRecord>) -> HashMap<String, Contact>
     contacts
 }
 
-fn alias_from_head(head: &StoreHead<HoshiRecord>) -> Option<String> {
+fn alias_from_head(head: &StoreHead<HoshiSignedRecord>, public_key: &str) -> Option<String> {
     head.get_all()
         .values()
-        .filter_map(|record| match &record.payload {
+        .filter(|record| record.verify())
+        .filter(|record| record.record.from == public_key)
+        .filter_map(|record| match &record.record.payload {
             HoshiPayload::Title { title } => Some(title.clone()),
             _ => None,
         })
@@ -185,31 +191,38 @@ fn alias_from_head(head: &StoreHead<HoshiRecord>) -> Option<String> {
 }
 
 fn chat_messages_from_head(
-    head: &StoreHead<HoshiRecord>,
+    head: &StoreHead<HoshiSignedRecord>,
     our_key: &str,
     peer_key: &str,
 ) -> HashMap<String, ChatMessage> {
     let mut result = HashMap::new();
     for record in head.get_all().values() {
-        let HoshiPayload::Text { content } = &record.payload else {
+        if !record.verify() {
+            continue;
+        }
+        if record.record.from != our_key && record.record.from != peer_key {
+            continue;
+        }
+        let HoshiPayload::Text { content } = &record.record.payload else {
             continue;
         };
         let created_at = record
+            .record
             .id
             .get_timestamp()
             .map(|ts| ts.to_unix().0 as i64)
             .unwrap_or(0);
-        let to = if record.from == our_key {
+        let to = if record.record.from == our_key {
             peer_key.to_string()
         } else {
             our_key.to_string()
         };
         result.insert(
-            record.id.to_string(),
+            record.record.id.to_string(),
             ChatMessage::new(
-                record.id.to_string(),
+                record.record.id.to_string(),
                 created_at,
-                record.from.clone(),
+                record.record.from.clone(),
                 to,
                 content.clone(),
             ),
@@ -221,6 +234,7 @@ fn chat_messages_from_head(
 pub struct HoshiClient {
     pub(crate) net: HoshiNetClient,
     store_dir: PathBuf,
+    identity: HoshiIdentity,
     public_key: RefCell<String>,
 
     pub(crate) audio_interface: RefCell<Option<Box<dyn AudioInterface>>>,
@@ -228,13 +242,13 @@ pub struct HoshiClient {
     calls: RefCell<Vec<Call>>,
     calls_watchers: Rc<RefCell<Vec<CallWatcher>>>,
 
-    contacts_head: RefCell<StoreHead<HoshiRecord>>,
+    contacts_head: RefCell<StoreHead<HoshiSignedRecord>>,
     contacts_watchers: Rc<RefCell<Vec<ContactWatcher>>>,
 
-    config_head: RefCell<StoreHead<HoshiRecord>>,
-    profile_heads: RefCell<HashMap<String, StoreHead<HoshiRecord>>>,
+    config_head: RefCell<StoreHead<HoshiSignedRecord>>,
+    profile_heads: RefCell<HashMap<String, StoreHead<HoshiSignedRecord>>>,
 
-    chats: RefCell<HashMap<String, StoreHead<HoshiRecord>>>,
+    chats: RefCell<HashMap<String, StoreHead<HoshiSignedRecord>>>,
     messages_watchers: Rc<RefCell<Vec<MessageWatcher>>>,
 }
 
@@ -254,34 +268,41 @@ impl HoshiClient {
         let identity = load_or_create_identity(&data_dir.join("hoshi_ed25519"))?;
         let default_public_key = identity.public_key_hex();
 
-        let config_head = StoreHead::<HoshiRecord>::new(CONFIG_HEAD.to_string(), Some(&store_dir));
-        let public_key = config_get(&config_head, CONFIG_KEY_PUBLIC_KEY)
+        let config_head =
+            StoreHead::<HoshiSignedRecord>::new(CONFIG_HEAD.to_string(), Some(&store_dir));
+        let configured_public_key = config_get(&config_head, CONFIG_KEY_PUBLIC_KEY);
+        let public_key = configured_public_key
+            .filter(|key| key == &default_public_key)
             .unwrap_or_else(|| default_public_key.clone());
 
         let tls_config = identity.make_client_tls_config();
         let net = HoshiNetClient::new(tls_config);
 
         let contacts_head =
-            StoreHead::<HoshiRecord>::new(CONTACTS_HEAD.to_string(), Some(&store_dir));
+            StoreHead::<HoshiSignedRecord>::new(CONTACTS_HEAD.to_string(), Some(&store_dir));
         let contacts = contacts_from_head(&contacts_head);
 
         let mut profile_heads = HashMap::new();
         profile_heads.insert(
             user_path(&public_key),
-            StoreHead::<HoshiRecord>::new(user_path(&public_key), Some(&store_dir)),
+            StoreHead::<HoshiSignedRecord>::new(user_path(&public_key), Some(&store_dir)),
         );
 
         let mut chats = HashMap::new();
         for contact in contacts.values() {
             let chat_id = chat_path(&public_key, &contact.public_key);
-            let mut chat_head = StoreHead::<HoshiRecord>::new(chat_id.clone(), Some(&store_dir));
+            let mut chat_head =
+                StoreHead::<HoshiSignedRecord>::new(chat_id.clone(), Some(&store_dir));
             chat_head.remote_add(contact.public_key.clone(), None);
             chats.insert(chat_id, chat_head);
 
             let profile_head = profile_heads
                 .entry(user_path(&contact.public_key))
                 .or_insert_with(|| {
-                    StoreHead::<HoshiRecord>::new(user_path(&contact.public_key), Some(&store_dir))
+                    StoreHead::<HoshiSignedRecord>::new(
+                        user_path(&contact.public_key),
+                        Some(&store_dir),
+                    )
                 });
             if contact.contact_type != ContactType::Blocked {
                 profile_head.remote_add(contact.public_key.clone(), None);
@@ -306,6 +327,7 @@ impl HoshiClient {
         Ok(Self {
             net,
             store_dir,
+            identity,
             public_key: RefCell::new(public_key),
             audio_interface: RefCell::new(None),
             calls: RefCell::new(vec![]),
@@ -332,9 +354,9 @@ impl HoshiClient {
             .map(|c| c.public_key.clone())
             .collect::<Vec<_>>();
         let mut profiles = self.profile_heads.borrow_mut();
-        let head = profiles
-            .entry(head_name.clone())
-            .or_insert_with(|| StoreHead::<HoshiRecord>::new(head_name, Some(&self.store_dir)));
+        let head = profiles.entry(head_name.clone()).or_insert_with(|| {
+            StoreHead::<HoshiSignedRecord>::new(head_name, Some(&self.store_dir))
+        });
         for key in contact_keys {
             head.remote_add(key, None);
         }
@@ -345,7 +367,9 @@ impl HoshiClient {
         self.profile_heads
             .borrow_mut()
             .entry(head_name.clone())
-            .or_insert_with(|| StoreHead::<HoshiRecord>::new(head_name, Some(&self.store_dir)));
+            .or_insert_with(|| {
+                StoreHead::<HoshiSignedRecord>::new(head_name, Some(&self.store_dir))
+            });
     }
 
     fn ensure_chat_head(&self, chat_id: &str) {
@@ -355,7 +379,7 @@ impl HoshiClient {
             .entry(chat_id.to_string())
             .or_insert_with(|| {
                 let mut head =
-                    StoreHead::<HoshiRecord>::new(chat_id.to_string(), Some(&self.store_dir));
+                    StoreHead::<HoshiSignedRecord>::new(chat_id.to_string(), Some(&self.store_dir));
                 if let Some(peer_key) = peer_key {
                     head.remote_add(peer_key, None);
                 }
@@ -385,7 +409,11 @@ impl HoshiClient {
         self.chats.borrow().keys().cloned().collect()
     }
 
-    fn sync_head(&self, head_name: &str, head: &mut StoreHead<HoshiRecord>) {
+    fn signed_record(&self, record: HoshiRecord) -> Result<HoshiSignedRecord> {
+        HoshiSignedRecord::sign(record, &self.identity)
+    }
+
+    fn sync_head(&self, head_name: &str, head: &mut StoreHead<HoshiSignedRecord>) {
         let from_key = self.public_key();
         let head_name = head_name.to_string();
         head.tx(|dest, cmd| {
@@ -509,11 +537,20 @@ impl HoshiClient {
         &self,
         from_key: &str,
         head_name: String,
-        command: HeadCommand<HoshiRecord>,
+        command: HeadCommand<HoshiSignedRecord>,
         changes: &mut StepChanges,
     ) {
         if head_name.starts_with("/chat/") {
-            if self.peer_key_for_chat_path(&head_name) != Some(from_key.to_string()) {
+            let Some(peer_key) = self.peer_key_for_chat_path(&head_name) else {
+                return;
+            };
+            if peer_key != from_key {
+                return;
+            }
+            if let HeadCommand::Put(record) = &command
+                && (!record.verify()
+                    || (record.record.from != self.public_key() && record.record.from != peer_key))
+            {
                 return;
             }
             self.ensure_chat_head(&head_name);
@@ -528,6 +565,11 @@ impl HoshiClient {
             }
         } else if head_name.starts_with("/user/") {
             if head_name != user_path(from_key) {
+                return;
+            }
+            if let HeadCommand::Put(record) = &command
+                && (!record.verify() || record.record.from != from_key)
+            {
                 return;
             }
             self.ensure_profile_head(from_key);
@@ -821,19 +863,22 @@ impl HoshiClient {
         let head_name = user_path(&self.public_key());
         let profiles = self.profile_heads.borrow_mut();
         if let Some(head) = profiles.get(&head_name)
-            && alias_from_head(head) == Some(alias.to_string())
+            && alias_from_head(head, &self.public_key()) == Some(alias.to_string())
         {
             return;
         }
         drop(profiles);
         let mut profiles = self.profile_heads.borrow_mut();
         if let Some(head) = profiles.get_mut(&head_name) {
-            head.queue(HoshiRecord::new(
+            let record = HoshiRecord::new(
                 self.public_key(),
                 HoshiPayload::Title {
                     title: alias.to_string(),
                 },
-            ));
+            );
+            if let Ok(record) = self.signed_record(record) {
+                head.queue(record);
+            }
         }
     }
 
@@ -842,7 +887,7 @@ impl HoshiClient {
         self.profile_heads
             .borrow()
             .get(&head_name)
-            .and_then(alias_from_head)
+            .and_then(|head| alias_from_head(head, public_key))
     }
 
     pub fn display_name(&self, public_key: &str) -> String {
@@ -853,14 +898,20 @@ impl HoshiClient {
     pub fn set_public_key(&self, key: String) -> Result<()> {
         let key = normalize_public_key(&key);
         validate_public_key_hex(&key)?;
+        if key != self.identity.public_key_hex() {
+            return Err(anyhow!(
+                "public key must match the loaded identity public key"
+            ));
+        }
         self.net.disconnect_all();
-        self.config_head.borrow_mut().insert(HoshiRecord::new(
+        let record = self.signed_record(HoshiRecord::new(
             self.public_key(),
             HoshiPayload::Config {
                 key: CONFIG_KEY_PUBLIC_KEY.to_string(),
                 value: key.clone(),
             },
-        ));
+        ))?;
+        self.config_head.borrow_mut().insert(record);
         *self.public_key.borrow_mut() = key;
         self.ensure_own_profile_head();
         self.notify_contacts_watchers();
@@ -901,6 +952,9 @@ impl HoshiClient {
     }
 
     pub fn message_upsert(&self, msg: ChatMessage) -> Result<()> {
+        if msg.from != self.public_key() {
+            return Err(anyhow!("message sender must match client public key"));
+        }
         let chat_id = msg.chat_id();
         self.ensure_chat_head(&chat_id);
         if let Some(peer_key) = self.peer_key_for_chat_path(&chat_id) {
@@ -908,13 +962,14 @@ impl HoshiClient {
             if let Some(head) = chats.get_mut(&chat_id) {
                 head.remote_add(peer_key, None);
                 let id = Uuid::parse_str(&msg.id).unwrap_or_else(|_| Uuid::now_v7());
-                head.queue(HoshiRecord::with_id(
+                let record = self.signed_record(HoshiRecord::with_id(
                     id,
                     msg.from.clone(),
                     HoshiPayload::Text {
                         content: msg.content.clone(),
                     },
-                ));
+                ))?;
+                head.queue(record);
             }
         }
         Ok(())
@@ -991,13 +1046,14 @@ impl HoshiClient {
     pub fn contact_upsert(&self, mut contact: Contact) -> Result<()> {
         contact.public_key = normalize_public_key(&contact.public_key);
         validate_public_key_hex(&contact.public_key)?;
-        self.contacts_head.borrow().queue(HoshiRecord::new(
+        let record = self.signed_record(HoshiRecord::new(
             self.public_key(),
             HoshiPayload::Contact {
                 public_key: contact.public_key.clone(),
                 contact_type: contact.contact_type.clone(),
             },
-        ));
+        ))?;
+        self.contacts_head.borrow().queue(record);
 
         let chat_id = chat_path(&self.public_key(), &contact.public_key);
         self.ensure_chat_head(&chat_id);
@@ -1020,7 +1076,7 @@ impl HoshiClient {
                 }
             }
             let head = profiles.entry(own_path.clone()).or_insert_with(|| {
-                StoreHead::<HoshiRecord>::new(own_path.clone(), Some(&self.store_dir))
+                StoreHead::<HoshiSignedRecord>::new(own_path.clone(), Some(&self.store_dir))
             });
             if contact.contact_type == ContactType::Blocked {
                 head.remote_drop(&contact.public_key);
@@ -1034,13 +1090,14 @@ impl HoshiClient {
 
     /// Remove a contact locally.
     pub fn contact_delete(&self, public_key: &str) -> Result<()> {
-        self.contacts_head.borrow().queue(HoshiRecord::new(
+        let record = self.signed_record(HoshiRecord::new(
             self.public_key(),
             HoshiPayload::Contact {
                 public_key: public_key.to_string(),
                 contact_type: ContactType::Deleted,
             },
-        ));
+        ))?;
+        self.contacts_head.borrow().queue(record);
         let own_path = user_path(&self.public_key());
         let mut profiles = self.profile_heads.borrow_mut();
         if let Some(head) = profiles.get_mut(&own_path) {
