@@ -21,7 +21,6 @@ pub struct RelayStatsSnapshot {
 
 #[derive(Debug, Default)]
 pub struct RelayStats {
-    connected_clients: AtomicU64,
     pending_messages: AtomicU64,
     pending_bytes: AtomicU64,
     messages_per_second: AtomicU64,
@@ -29,22 +28,14 @@ pub struct RelayStats {
 }
 
 impl RelayStats {
-    pub fn client_connected(&self) {
-        self.connected_clients.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn client_disconnected(&self) {
-        self.connected_clients.fetch_sub(1, Ordering::Relaxed);
-    }
-
     pub fn record_message(&self, bytes: u64) {
         self.pending_messages.fetch_add(1, Ordering::Relaxed);
         self.pending_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
 
-    pub fn snapshot(&self) -> RelayStatsSnapshot {
+    pub fn snapshot(&self, connected_clients: u64) -> RelayStatsSnapshot {
         RelayStatsSnapshot {
-            connected_clients: self.connected_clients.load(Ordering::Relaxed),
+            connected_clients,
             messages_per_second: self.messages_per_second.load(Ordering::Relaxed),
             bytes_per_second: self.bytes_per_second.load(Ordering::Relaxed),
         }
@@ -83,6 +74,17 @@ impl ServerState {
             stats,
             public_key,
         })
+    }
+
+    pub fn connected_clients(&self) -> u64 {
+        self.connections
+            .iter()
+            .map(|conns| conns.value().len() as u64)
+            .sum()
+    }
+
+    pub fn stats_snapshot(&self) -> RelayStatsSnapshot {
+        self.stats.snapshot(self.connected_clients())
     }
 }
 

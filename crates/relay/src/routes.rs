@@ -25,6 +25,7 @@ use crate::{ServerState, api, connection::HoshiConnection, http::TlsConnectInfo}
 
 type Body = Full<Bytes>;
 const STATUS_TEMPLATE: &str = include_str!("status.html");
+const STATUS_OK: &str = "ok";
 
 pub async fn handle_request(
     state: ServerState,
@@ -35,7 +36,7 @@ pub async fn handle_request(
         return Ok(empty_response(StatusCode::NOT_FOUND));
     }
 
-    if is_websocket_upgrade(&req) {
+    if is_websocket_upgrade_attempt(&req) {
         return Ok(websocket_response(state, conn_info, &mut req));
     }
 
@@ -46,6 +47,7 @@ pub async fn handle_request(
 }
 
 fn relay_status_response(state: ServerState, req: &Request<Incoming>) -> Response<Body> {
+    let status = relay_status(&state);
     let accepts_html = req
         .headers()
         .get(ACCEPT)
@@ -54,40 +56,42 @@ fn relay_status_response(state: ServerState, req: &Request<Incoming>) -> Respons
         .unwrap_or(false);
 
     if accepts_html {
-        let stats = state.stats.snapshot();
         response(
             StatusCode::OK,
             "text/html; charset=utf-8",
-            render_status_html(&state.public_key, &stats),
+            render_status_html(&status),
         )
     } else {
-        let stats = state.stats.snapshot();
-        let body = serde_json::to_string(&api::RelayStatusResponse {
-            status: "ok".to_string(),
-            public_key: state.public_key.clone(),
-            connected_clients: stats.connected_clients,
-            messages_per_second: stats.messages_per_second,
-            bytes_per_second: stats.bytes_per_second,
-        })
-        .expect("relay status response serializes");
+        let body = serde_json::to_string(&status).expect("relay status response serializes");
         response(StatusCode::OK, "application/json", body)
     }
 }
 
-fn render_status_html(public_key: &str, stats: &crate::state::RelayStatsSnapshot) -> String {
+fn relay_status(state: &ServerState) -> api::RelayStatusResponse {
+    let stats = state.stats_snapshot();
+    api::RelayStatusResponse {
+        status: STATUS_OK.to_string(),
+        public_key: state.public_key.clone(),
+        connected_clients: stats.connected_clients,
+        messages_per_second: stats.messages_per_second,
+        bytes_per_second: stats.bytes_per_second,
+    }
+}
+
+fn render_status_html(status: &api::RelayStatusResponse) -> String {
     STATUS_TEMPLATE
-        .replace("<!--PUBLIC_KEY-->", public_key)
+        .replace("<!--PUBLIC_KEY-->", &status.public_key)
         .replace(
             "<!--CONNECTED_CLIENTS-->",
-            &stats.connected_clients.to_string(),
+            &status.connected_clients.to_string(),
         )
         .replace(
             "<!--MESSAGES_PER_SECOND-->",
-            &stats.messages_per_second.to_string(),
+            &status.messages_per_second.to_string(),
         )
         .replace(
             "<!--BYTES_PER_SECOND-->",
-            &stats.bytes_per_second.to_string(),
+            &status.bytes_per_second.to_string(),
         )
 }
 
@@ -96,6 +100,10 @@ fn websocket_response(
     conn_info: TlsConnectInfo,
     req: &mut Request<Incoming>,
 ) -> Response<Body> {
+    if !is_valid_websocket_upgrade(req) {
+        return empty_response(StatusCode::BAD_REQUEST);
+    }
+
     let user_agent = req
         .headers()
         .get(USER_AGENT)
@@ -151,7 +159,15 @@ fn websocket_response(
     res
 }
 
-fn is_websocket_upgrade(req: &Request<Incoming>) -> bool {
+fn is_websocket_upgrade_attempt(req: &Request<Incoming>) -> bool {
+    req.headers()
+        .get(UPGRADE)
+        .and_then(|h| h.to_str().ok())
+        .map(|h| h.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false)
+}
+
+fn is_valid_websocket_upgrade(req: &Request<Incoming>) -> bool {
     let headers = req.headers();
     req.method() == Method::GET
         && req.version() >= Version::HTTP_11
@@ -208,7 +224,6 @@ async fn handle_ws(
         .entry(client_key.clone())
         .or_default()
         .push(HoshiConnection { id: conn_id, tx });
-    state.stats.client_connected();
 
     println!("WS: [{client_key}] connected (conn {conn_id})");
 
@@ -254,10 +269,14 @@ async fn handle_ws(
         }
     }
 
-    // Cleanup: remove this connection from the map
-    if let Some(mut conns) = state.connections.get_mut(&client_key) {
+    let should_remove_key = if let Some(mut conns) = state.connections.get_mut(&client_key) {
         conns.retain(|c| c.id != conn_id);
+        conns.is_empty()
+    } else {
+        false
+    };
+    if should_remove_key {
+        state.connections.remove(&client_key);
     }
-    state.stats.client_disconnected();
     println!("WS: [{client_key}] disconnected (conn {conn_id})");
 }

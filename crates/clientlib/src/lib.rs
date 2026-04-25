@@ -7,6 +7,7 @@ mod hoshi_client;
 mod hoshi_net_client;
 pub mod identity;
 mod node;
+mod record;
 mod relay;
 mod store;
 
@@ -18,9 +19,10 @@ pub use call::{Call, CallPartyStatus};
 pub use chat::ChatMessage;
 pub use contact::{Contact, ContactType};
 pub use hoshi_client::{HoshiClient, HoshiWatchRef};
-pub use hoshi_net_client::{HoshiEnvelope, HoshiMessage, HoshiNetClient, HoshiPayload};
+pub use hoshi_net_client::{HoshiEnvelope, HoshiMessage, HoshiNetClient, HoshiNetPayload};
 pub use node::{
     chat_path, normalize_public_key, peer_key_from_chat_path, user_path, validate_public_key_hex,
 };
+pub use record::{HoshiPayload, HoshiRecord};
 pub use relay::RelayInfo;
 pub use store::{HeadCommand, Store, StoreHead};

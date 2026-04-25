@@ -7,7 +7,7 @@ use crate::{
     AudioStream, Contact,
     audio_chunk::{AudioChunk, linear_to_ulaw},
     hoshi_client::HoshiClient,
-    hoshi_net_client::{HoshiMessage, HoshiPayload},
+    hoshi_net_client::{HoshiMessage, HoshiNetPayload},
 };
 
 #[derive(Clone, Debug)]
@@ -352,7 +352,7 @@ impl Call {
                 client.net.send(HoshiMessage::new(
                     my_key.clone(),
                     key,
-                    HoshiPayload::UpdateCallState {
+                    HoshiNetPayload::UpdateCallState {
                         call_id: self.id.clone(),
                         events: self.events.clone(),
                     },
@@ -512,7 +512,7 @@ impl Call {
                 client.net.send(HoshiMessage::new(
                     my_key.clone(),
                     key.clone(),
-                    HoshiPayload::AudioChunk {
+                    HoshiNetPayload::AudioChunk {
                         call_id: self.id.clone(),
                         chunk: chunk.clone(),
                     },

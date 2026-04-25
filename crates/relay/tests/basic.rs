@@ -5,7 +5,7 @@ use futures::{SinkExt, StreamExt};
 use hoshi_clientlib::{HoshiEnvelope, identity::HoshiIdentity};
 use hoshi_relay::api;
 use reqwest::StatusCode;
-use reqwest::header::USER_AGENT;
+use reqwest::header::{CONNECTION, SEC_WEBSOCKET_VERSION, UPGRADE, USER_AGENT};
 use reqwest_websocket::{Message, RequestBuilderExt};
 use tokio::time::{Duration, sleep, timeout};
 
@@ -93,6 +93,27 @@ async fn websocket_rejects_hoshi_user_agent_without_client_certificate() {
             .expect("websocket response");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn malformed_websocket_upgrade_returns_bad_request() {
+    with_relay(|state| async move {
+        let identity = HoshiIdentity::generate();
+        let client = ws_client(&identity);
+
+        let response = client
+            .get(state.config.uri())
+            .header(USER_AGENT, "Hoshi relay test")
+            .header(UPGRADE, "websocket")
+            .header(CONNECTION, "upgrade")
+            .header(SEC_WEBSOCKET_VERSION, "13")
+            .send()
+            .await
+            .expect("malformed websocket response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     })
     .await;
 }

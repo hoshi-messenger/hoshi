@@ -5,7 +5,7 @@ use reqwest::header::USER_AGENT;
 use reqwest_websocket::{Message, RequestBuilderExt};
 use serde::{Deserialize, Serialize};
 
-use crate::{RelayInfo, audio_chunk::AudioChunk, call::CallPartyEvent};
+use crate::{AudioChunk, HeadCommand, HoshiRecord, RelayInfo, call::CallPartyEvent};
 
 pub struct HoshiNetClient {
     relay_list: RefCell<Vec<RelayInfo>>,
@@ -218,11 +218,11 @@ pub struct HoshiEnvelope {
 pub struct HoshiMessage {
     pub from_key: String,
     pub to_key: String,
-    pub payload: HoshiPayload,
+    pub payload: HoshiNetPayload,
 }
 
 impl HoshiMessage {
-    pub fn new(from_key: String, to_key: String, payload: HoshiPayload) -> Self {
+    pub fn new(from_key: String, to_key: String, payload: HoshiNetPayload) -> Self {
         Self {
             from_key,
             to_key,
@@ -233,7 +233,7 @@ impl HoshiMessage {
 
 /// The payload, for now just Ping/Pong, we'll extend this later
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum HoshiPayload {
+pub enum HoshiNetPayload {
     Ping,
     Pong,
 
@@ -247,6 +247,6 @@ pub enum HoshiPayload {
     },
     StoreSync {
         head_name: String,
-        command: Vec<u8>,
+        command: HeadCommand<HoshiRecord>,
     },
 }
