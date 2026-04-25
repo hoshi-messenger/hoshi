@@ -28,12 +28,15 @@ const CALL_END_GRACE_SECS: u64 = 5;
 
 type ContactWatchFn = Rc<dyn Fn(&HoshiClient, &HashMap<String, Contact>)>;
 type MessageWatchFn = Rc<dyn Fn(&HoshiClient, &str, &HashMap<String, ChatMessage>)>;
-type CallWatchFn = Rc<dyn Fn(&HoshiClient, &Vec<Call>)>;
+type CallWatchFn = Rc<dyn Fn(&HoshiClient, &[Call])>;
 
-struct ContactWatcher {
+struct Watcher<F: ?Sized> {
     id: Uuid,
-    fun: ContactWatchFn,
+    fun: Rc<F>,
 }
+
+type ContactWatcher = Watcher<dyn Fn(&HoshiClient, &HashMap<String, Contact>)>;
+type CallWatcher = Watcher<dyn Fn(&HoshiClient, &[Call])>;
 
 pub struct HoshiWatchRef {
     cleanup: Option<Box<dyn FnMut()>>,
@@ -57,13 +60,8 @@ impl Drop for HoshiWatchRef {
 
 struct MessageWatcher {
     id: Uuid,
-    filter: String,
+    filter: Option<String>,
     fun: MessageWatchFn,
-}
-
-struct CallWatcher {
-    id: Uuid,
-    fun: CallWatchFn,
 }
 
 #[derive(Default)]
@@ -231,6 +229,59 @@ fn chat_messages_from_head(
     result
 }
 
+fn signed_store_head(name: String, store_dir: &Path) -> StoreHead<HoshiSignedRecord> {
+    StoreHead::<HoshiSignedRecord>::new(name, Some(store_dir))
+}
+
+fn register_watch<F: ?Sized + 'static>(
+    watchers: &Rc<RefCell<Vec<Watcher<F>>>>,
+    fun: Rc<F>,
+) -> HoshiWatchRef {
+    let id = Uuid::now_v7();
+    watchers.borrow_mut().push(Watcher { id, fun });
+    let watchers = Rc::clone(watchers);
+    HoshiWatchRef::new(move || {
+        watchers.borrow_mut().retain(|watcher| watcher.id != id);
+    })
+}
+
+fn configure_contact_heads(
+    public_key: &str,
+    store_dir: &Path,
+    chats: &mut HashMap<String, StoreHead<HoshiSignedRecord>>,
+    profiles: &mut HashMap<String, StoreHead<HoshiSignedRecord>>,
+    contact: &Contact,
+    request_profile_tip: bool,
+) {
+    let chat_id = chat_path(public_key, &contact.public_key);
+    chats
+        .entry(chat_id.clone())
+        .or_insert_with(|| signed_store_head(chat_id, store_dir))
+        .remote_add(contact.public_key.clone(), None);
+
+    let contact_profile_path = user_path(&contact.public_key);
+    let contact_profile = profiles
+        .entry(contact_profile_path.clone())
+        .or_insert_with(|| signed_store_head(contact_profile_path, store_dir));
+    if contact.contact_type == ContactType::Blocked {
+        contact_profile.remote_drop(&contact.public_key);
+    } else if request_profile_tip {
+        contact_profile.remote_add_with_tip_request(contact.public_key.clone(), None);
+    } else {
+        contact_profile.remote_add(contact.public_key.clone(), None);
+    }
+
+    let own_profile_path = user_path(public_key);
+    let own_profile = profiles
+        .entry(own_profile_path.clone())
+        .or_insert_with(|| signed_store_head(own_profile_path, store_dir));
+    if contact.contact_type == ContactType::Blocked {
+        own_profile.remote_drop(&contact.public_key);
+    } else {
+        own_profile.remote_add(contact.public_key.clone(), None);
+    }
+}
+
 pub struct HoshiClient {
     pub(crate) net: HoshiNetClient,
     store_dir: PathBuf,
@@ -285,36 +336,19 @@ impl HoshiClient {
         let mut profile_heads = HashMap::new();
         profile_heads.insert(
             user_path(&public_key),
-            StoreHead::<HoshiSignedRecord>::new(user_path(&public_key), Some(&store_dir)),
+            signed_store_head(user_path(&public_key), &store_dir),
         );
 
         let mut chats = HashMap::new();
         for contact in contacts.values() {
-            let chat_id = chat_path(&public_key, &contact.public_key);
-            let mut chat_head =
-                StoreHead::<HoshiSignedRecord>::new(chat_id.clone(), Some(&store_dir));
-            chat_head.remote_add(contact.public_key.clone(), None);
-            chats.insert(chat_id, chat_head);
-
-            let profile_head = profile_heads
-                .entry(user_path(&contact.public_key))
-                .or_insert_with(|| {
-                    StoreHead::<HoshiSignedRecord>::new(
-                        user_path(&contact.public_key),
-                        Some(&store_dir),
-                    )
-                });
-            if contact.contact_type != ContactType::Blocked {
-                profile_head.remote_add_with_tip_request(contact.public_key.clone(), None);
-            }
-        }
-
-        if let Some(own_profile) = profile_heads.get_mut(&user_path(&public_key)) {
-            for contact in contacts.values() {
-                if contact.contact_type != ContactType::Blocked {
-                    own_profile.remote_add(contact.public_key.clone(), None);
-                }
-            }
+            configure_contact_heads(
+                &public_key,
+                &store_dir,
+                &mut chats,
+                &mut profile_heads,
+                contact,
+                true,
+            );
         }
 
         let relay_list = if cfg!(debug_assertions) {
@@ -354,9 +388,9 @@ impl HoshiClient {
             .map(|c| c.public_key.clone())
             .collect::<Vec<_>>();
         let mut profiles = self.profile_heads.borrow_mut();
-        let head = profiles.entry(head_name.clone()).or_insert_with(|| {
-            StoreHead::<HoshiSignedRecord>::new(head_name, Some(&self.store_dir))
-        });
+        let head = profiles
+            .entry(head_name.clone())
+            .or_insert_with(|| signed_store_head(head_name, &self.store_dir));
         for key in contact_keys {
             head.remote_add(key, None);
         }
@@ -367,9 +401,7 @@ impl HoshiClient {
         self.profile_heads
             .borrow_mut()
             .entry(head_name.clone())
-            .or_insert_with(|| {
-                StoreHead::<HoshiSignedRecord>::new(head_name, Some(&self.store_dir))
-            });
+            .or_insert_with(|| signed_store_head(head_name, &self.store_dir));
     }
 
     fn ensure_chat_head(&self, chat_id: &str) {
@@ -378,8 +410,7 @@ impl HoshiClient {
             .borrow_mut()
             .entry(chat_id.to_string())
             .or_insert_with(|| {
-                let mut head =
-                    StoreHead::<HoshiSignedRecord>::new(chat_id.to_string(), Some(&self.store_dir));
+                let mut head = signed_store_head(chat_id.to_string(), &self.store_dir);
                 if let Some(peer_key) = peer_key {
                     head.remote_add(peer_key, None);
                 }
@@ -495,7 +526,12 @@ impl HoshiClient {
             .messages_watchers
             .borrow()
             .iter()
-            .filter(|watcher| watcher.filter.is_empty() || watcher.filter == chat_id)
+            .filter(|watcher| {
+                watcher
+                    .filter
+                    .as_deref()
+                    .is_none_or(|filter| filter == chat_id)
+            })
             .map(|watcher| Rc::clone(&watcher.fun))
             .collect::<Vec<_>>();
         if watchers.is_empty() {
@@ -541,52 +577,72 @@ impl HoshiClient {
         changes: &mut StepChanges,
     ) {
         if head_name.starts_with("/chat/") {
-            let Some(peer_key) = self.peer_key_for_chat_path(&head_name) else {
-                return;
-            };
-            if peer_key != from_key {
-                return;
-            }
-            if let HeadCommand::Put(record) = &command
-                && (!record.verify()
-                    || (record.record.from != self.public_key() && record.record.from != peer_key))
-            {
-                return;
-            }
-            self.ensure_chat_head(&head_name);
-            if self.contact_get(from_key).is_none() {
-                let _ = self.contact_upsert(Contact::new_unknown(from_key.to_string()));
-            }
-            let mut chats = self.chats.borrow_mut();
-            if let Some(head) = chats.get_mut(&head_name)
-                && head.rx(from_key, command)
-            {
-                changes.note_chat(head_name);
-            }
+            self.process_chat_sync(from_key, head_name, command, changes);
         } else if head_name.starts_with("/user/") {
-            let own_key = self.public_key();
-            let is_owner_sync = head_name == user_path(from_key);
-            let is_request_for_own_profile = head_name == user_path(&own_key)
-                && matches!(&command, HeadCommand::Tip(_) | HeadCommand::TipSecondary(_));
-            if !is_owner_sync && !is_request_for_own_profile {
-                return;
-            }
-            if let HeadCommand::Put(record) = &command
-                && (!record.verify() || record.record.from != from_key)
-            {
-                return;
-            }
-            if is_owner_sync {
-                self.ensure_profile_head(from_key);
-            } else {
-                self.ensure_profile_head(&own_key);
-            }
-            let mut profiles = self.profile_heads.borrow_mut();
-            if let Some(head) = profiles.get_mut(&head_name)
-                && head.rx(from_key, command)
-            {
-                changes.note_profiles();
-            }
+            self.process_profile_sync(from_key, head_name, command, changes);
+        }
+    }
+
+    fn process_chat_sync(
+        &self,
+        from_key: &str,
+        head_name: String,
+        command: HeadCommand<HoshiSignedRecord>,
+        changes: &mut StepChanges,
+    ) {
+        let Some(peer_key) = self.peer_key_for_chat_path(&head_name) else {
+            return;
+        };
+        if peer_key != from_key {
+            return;
+        }
+        if let HeadCommand::Put(record) = &command
+            && (!record.verify()
+                || (record.record.from != self.public_key() && record.record.from != peer_key))
+        {
+            return;
+        }
+        self.ensure_chat_head(&head_name);
+        if self.contact_get(from_key).is_none() {
+            let _ = self.contact_upsert(Contact::new_unknown(from_key.to_string()));
+        }
+        let mut chats = self.chats.borrow_mut();
+        if let Some(head) = chats.get_mut(&head_name)
+            && head.rx(from_key, command)
+        {
+            changes.note_chat(head_name);
+        }
+    }
+
+    fn process_profile_sync(
+        &self,
+        from_key: &str,
+        head_name: String,
+        command: HeadCommand<HoshiSignedRecord>,
+        changes: &mut StepChanges,
+    ) {
+        let own_key = self.public_key();
+        let is_owner_sync = head_name == user_path(from_key);
+        let is_request_for_own_profile = head_name == user_path(&own_key)
+            && matches!(&command, HeadCommand::Tip(_) | HeadCommand::TipSecondary(_));
+        if !is_owner_sync && !is_request_for_own_profile {
+            return;
+        }
+        if let HeadCommand::Put(record) = &command
+            && (!record.verify() || record.record.from != from_key)
+        {
+            return;
+        }
+        if is_owner_sync {
+            self.ensure_profile_head(from_key);
+        } else {
+            self.ensure_profile_head(&own_key);
+        }
+        let mut profiles = self.profile_heads.borrow_mut();
+        if let Some(head) = profiles.get_mut(&head_name)
+            && head.rx(from_key, command)
+        {
+            changes.note_profiles();
         }
     }
 
@@ -616,22 +672,14 @@ impl HoshiClient {
                                 CallPartyStatus::Ringing,
                             ));
                             let msgs = self.build_call_state_messages(&call);
-                            if let Some(interface) = self.audio_interface.borrow().as_ref()
-                                && let Ok(stream) = interface.create(self, &call)
-                            {
-                                call.set_audio(Some(stream));
-                            }
+                            self.attach_audio(&call);
                             self.calls.borrow_mut().push(call);
                             for msg in msgs {
                                 self.net.send(msg);
                             }
                         }
                         Some(CallPartyStatus::Ringing | CallPartyStatus::Active) => {
-                            if let Some(interface) = self.audio_interface.borrow().as_ref()
-                                && let Ok(stream) = interface.create(self, &call)
-                            {
-                                call.set_audio(Some(stream));
-                            }
+                            self.attach_audio(&call);
                             self.calls.borrow_mut().push(call);
                         }
                         Some(CallPartyStatus::HungUp) | None => {}
@@ -699,12 +747,7 @@ impl HoshiClient {
     pub fn call_start(&self, parties: Vec<Contact>) {
         let call = Call::new(self.public_key(), parties);
 
-        if let Some(interface) = self.audio_interface.borrow().as_ref() {
-            if let Ok(stream) = interface.create(self, &call) {
-                call.set_audio(Some(stream));
-            }
-        }
-
+        self.attach_audio(&call);
         self.send_call_state(&call);
         self.calls.borrow_mut().push(call);
         self.notify_calls_watchers();
@@ -712,21 +755,12 @@ impl HoshiClient {
 
     pub fn calls_watch<F>(&self, f: F) -> HoshiWatchRef
     where
-        F: Fn(&Self, &Vec<Call>) + 'static,
+        F: Fn(&Self, &[Call]) + 'static,
     {
         let fun: CallWatchFn = Rc::new(f);
         let calls = self.calls.borrow().clone();
-        fun(self, &calls);
-
-        let id = Uuid::now_v7();
-        self.calls_watchers.borrow_mut().push(CallWatcher {
-            id,
-            fun: Rc::clone(&fun),
-        });
-        let watchers = Rc::clone(&self.calls_watchers);
-        HoshiWatchRef::new(move || {
-            watchers.borrow_mut().retain(|watcher| watcher.id != id);
-        })
+        fun(self, calls.as_slice());
+        register_watch(&self.calls_watchers, fun)
     }
 
     pub fn call_get(&self, call_id: &str) -> Option<Call> {
@@ -742,20 +776,17 @@ impl HoshiClient {
         self.calls.borrow().clone()
     }
 
-    fn send_call_state(&self, call: &Call) {
-        let my_key = self.public_key();
-        for key in call.non_hungup_party_keys() {
-            if key == my_key {
-                continue;
-            }
-            self.net.send(HoshiMessage::new(
-                my_key.clone(),
-                key,
-                HoshiNetPayload::UpdateCallState {
-                    call_id: call.id().to_string(),
-                    events: call.events().clone(),
-                },
-            ));
+    fn attach_audio(&self, call: &Call) {
+        if let Some(interface) = self.audio_interface.borrow().as_ref()
+            && let Ok(stream) = interface.create(self, call)
+        {
+            call.set_audio(Some(stream));
+        }
+    }
+
+    pub(crate) fn send_call_state(&self, call: &Call) {
+        for msg in self.build_call_state_messages(call) {
+            self.net.send(msg);
         }
     }
 
@@ -830,7 +861,7 @@ impl HoshiClient {
                     key,
                     HoshiNetPayload::UpdateCallState {
                         call_id: call.id().to_string(),
-                        events: call.events().clone(),
+                        events: call.events().to_vec(),
                     },
                 )
             })
@@ -984,22 +1015,27 @@ impl HoshiClient {
     }
 
     /// Call this function to get notified whenever messages in a
-    /// particular chat_id as specified by filter changes, can also
-    /// be left empty to get notified about all messages.
+    /// particular chat_id as specified by filter changes. Use None to
+    /// get notified about all messages.
     #[inline]
-    pub fn messages_watch<F>(&self, filter: String, f: F) -> HoshiWatchRef
+    pub fn messages_watch<F>(&self, filter: Option<String>, f: F) -> HoshiWatchRef
     where
         F: Fn(&HoshiClient, &str, &HashMap<String, ChatMessage>) + 'static,
     {
         let fun: MessageWatchFn = Rc::new(f);
-        if filter.is_empty() {
-            for chat_id in self.chat_ids() {
-                if let Some(chat) = self.chat_messages_snapshot(&chat_id) {
-                    fun(self, &chat_id, &chat);
+        match filter.as_deref() {
+            None => {
+                for chat_id in self.chat_ids() {
+                    if let Some(chat) = self.chat_messages_snapshot(&chat_id) {
+                        fun(self, &chat_id, &chat);
+                    }
                 }
             }
-        } else if let Some(chat) = self.chat_messages_snapshot(&filter) {
-            fun(self, &filter, &chat);
+            Some(chat_id) => {
+                if let Some(chat) = self.chat_messages_snapshot(chat_id) {
+                    fun(self, chat_id, &chat);
+                }
+            }
         }
 
         let id = Uuid::now_v7();
@@ -1033,15 +1069,7 @@ impl HoshiClient {
         let fun: ContactWatchFn = Rc::new(f);
         let contacts = self.contacts_snapshot();
         fun(self, &contacts);
-        let id = Uuid::now_v7();
-        self.contacts_watchers.borrow_mut().push(ContactWatcher {
-            id,
-            fun: Rc::clone(&fun),
-        });
-        let watchers = Rc::clone(&self.contacts_watchers);
-        HoshiWatchRef::new(move || {
-            watchers.borrow_mut().retain(|watcher| watcher.id != id);
-        })
+        register_watch(&self.contacts_watchers, fun)
     }
 
     /// Lookup a particular public_key in the current snapshot of Contacts
@@ -1063,35 +1091,14 @@ impl HoshiClient {
         ))?;
         self.contacts_head.borrow().queue(record);
 
-        let chat_id = chat_path(&self.public_key(), &contact.public_key);
-        self.ensure_chat_head(&chat_id);
-        {
-            let mut chats = self.chats.borrow_mut();
-            if let Some(head) = chats.get_mut(&chat_id) {
-                head.remote_add(contact.public_key.clone(), None);
-            }
-        }
-
-        self.ensure_profile_head(&contact.public_key);
-        let own_path = user_path(&self.public_key());
-        {
-            let mut profiles = self.profile_heads.borrow_mut();
-            if let Some(head) = profiles.get_mut(&user_path(&contact.public_key)) {
-                if contact.contact_type == ContactType::Blocked {
-                    head.remote_drop(&contact.public_key);
-                } else {
-                    head.remote_add_with_tip_request(contact.public_key.clone(), None);
-                }
-            }
-            let head = profiles.entry(own_path.clone()).or_insert_with(|| {
-                StoreHead::<HoshiSignedRecord>::new(own_path.clone(), Some(&self.store_dir))
-            });
-            if contact.contact_type == ContactType::Blocked {
-                head.remote_drop(&contact.public_key);
-            } else {
-                head.remote_add(contact.public_key.clone(), None);
-            }
-        }
+        configure_contact_heads(
+            &self.public_key(),
+            &self.store_dir,
+            &mut self.chats.borrow_mut(),
+            &mut self.profile_heads.borrow_mut(),
+            &contact,
+            true,
+        );
 
         Ok(())
     }
@@ -1197,6 +1204,35 @@ mod tests {
         }
 
         assert_eq!(client_a.display_name(&key_b), "Bob");
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_contact_does_not_request_profile_tip() -> Result<()> {
+        let dir_a = tempfile::tempdir()?;
+        let dir_b = tempfile::tempdir()?;
+        let client_a = HoshiClient::new(Some(dir_a.path().to_path_buf()))?;
+        let client_b = HoshiClient::new(Some(dir_b.path().to_path_buf()))?;
+        let key_b = client_b.public_key();
+
+        let mut contact = Contact::new(key_b.clone());
+        contact.contact_type = ContactType::Blocked;
+        client_a.contact_upsert(contact)?;
+
+        let profile_requests = {
+            let mut profiles = client_a.profile_heads.borrow_mut();
+            let head = profiles
+                .get_mut(&user_path(&key_b))
+                .expect("blocked contact profile head should exist");
+            let mut commands = Vec::new();
+            head.tx(|dest, command| commands.push((dest, command)));
+            commands
+        };
+
+        assert!(
+            profile_requests.is_empty(),
+            "blocked contacts should not queue profile sync requests"
+        );
         Ok(())
     }
 }

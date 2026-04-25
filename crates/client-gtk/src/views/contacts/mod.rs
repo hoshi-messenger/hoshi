@@ -277,7 +277,7 @@ fn view_contacts_page(state: AppState, page: NavigationPage, chat: NavigationPag
 
     {
         let rebuild_list = rebuild_list.clone();
-        let watch = state.client.messages_watch(String::new(), move |_, _, _| {
+        let watch = state.client.messages_watch(None, move |_, _, _| {
             let rebuild_list = rebuild_list.clone();
             glib::idle_add_local_once(move || {
                 rebuild_list();

@@ -18,7 +18,7 @@ fn main() -> Result<()> {
 
     let _messages_watch = {
         let msg_queue = msg_queue.clone();
-        client.messages_watch("".to_string(), move |client, _filter, msgs| {
+        client.messages_watch(None, move |client, _filter, msgs| {
             let mut sorted = msgs.values().collect::<Vec<&ChatMessage>>();
             sorted.sort();
             if let Some(last) = sorted.last()

@@ -129,7 +129,7 @@ fn view_contact_chat_page(state: AppState, page: NavigationPage, contact: Contac
         let scroll = scroll.clone().downgrade();
         let watch = state
             .client
-            .messages_watch(chat_id, move |_, _chat_id, messages| {
+            .messages_watch(Some(chat_id), move |_, _chat_id, messages| {
                 let Some(vbox) = vbox.upgrade() else {
                     return;
                 };

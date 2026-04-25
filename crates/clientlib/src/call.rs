@@ -135,13 +135,13 @@ impl Call {
             .map(|p| p.status)
     }
 
-    pub fn events(&self) -> &Vec<CallPartyEvent> {
+    pub fn events(&self) -> &[CallPartyEvent] {
         &self.events
     }
 
     pub fn add_event(&mut self, event: CallPartyEvent) {
         self.events.push(event);
-        self.rebuild_parties_simple();
+        self.rebuild_parties(&|key| Contact::new(key.to_string()));
     }
 
     pub fn add_event_with_contact(&mut self, event: CallPartyEvent, contact: Contact) {
@@ -157,7 +157,7 @@ impl Call {
             });
         }
         self.events.push(event);
-        self.rebuild_parties_simple();
+        self.rebuild_parties(&|key| Contact::new(key.to_string()));
     }
 
     pub fn merge_events(
@@ -174,34 +174,6 @@ impl Call {
         self.rebuild_parties(contact_lookup);
     }
 
-    /// Rebuild parties from events, preserving existing Contact aliases
-    fn rebuild_parties_simple(&mut self) {
-        self.events.sort();
-        let mut status_map: Vec<(&str, CallPartyStatus)> = Vec::new();
-        for event in &self.events {
-            if let Some(entry) = status_map.iter_mut().find(|(k, _)| *k == event.key()) {
-                entry.1 = event.status();
-            } else {
-                status_map.push((event.key(), event.status()));
-            }
-        }
-        for (key, status) in &status_map {
-            if let Some(party) = self
-                .parties
-                .iter_mut()
-                .find(|p| p.contact.public_key == *key)
-            {
-                party.status = *status;
-            } else {
-                self.parties.push(CallParty {
-                    contact: Contact::new(key.to_string()),
-                    status: *status,
-                });
-            }
-        }
-    }
-
-    /// Rebuild parties from events, using contact_lookup for new parties
     fn rebuild_parties(&mut self, contact_lookup: &impl Fn(&str) -> Contact) {
         self.events.sort();
         let mut status_map: Vec<(&str, CallPartyStatus)> = Vec::new();
@@ -344,20 +316,7 @@ impl Call {
 
         if should_send {
             self.last_invite = Some(now);
-            let my_key = client.public_key();
-            for key in self.non_hungup_party_keys() {
-                if key == my_key {
-                    continue;
-                }
-                client.net.send(HoshiMessage::new(
-                    my_key.clone(),
-                    key,
-                    HoshiNetPayload::UpdateCallState {
-                        call_id: self.id.clone(),
-                        events: self.events.clone(),
-                    },
-                ));
-            }
+            client.send_call_state(self);
         }
 
         // --- Audio: recover from stream errors ---

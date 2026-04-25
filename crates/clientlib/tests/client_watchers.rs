@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use anyhow::Result;
-use hoshi_clientlib::{Call, ChatMessage, Contact, HoshiClient};
+use hoshi_clientlib::{ChatMessage, Contact, HoshiClient};
 
 fn key(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
@@ -85,7 +85,7 @@ fn unified_watch_handles_unsubscribe_on_drop() -> Result<()> {
     };
     let messages_watch = {
         let message_events = Rc::clone(&message_events);
-        client.messages_watch(String::new(), move |_, _, messages| {
+        client.messages_watch(None, move |_, _, messages| {
             message_events.borrow_mut().push(messages.len());
         })
     };
@@ -168,7 +168,7 @@ fn calls_watch_returns_drop_handle() -> Result<()> {
     let events = Rc::new(RefCell::new(Vec::<usize>::new()));
     let watch = {
         let events = Rc::clone(&events);
-        client.calls_watch(move |_, calls: &Vec<Call>| {
+        client.calls_watch(move |_, calls| {
             events.borrow_mut().push(calls.len());
         })
     };
