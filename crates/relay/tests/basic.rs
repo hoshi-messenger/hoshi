@@ -1,7 +1,7 @@
 mod common;
 
 use common::{RelayApi, with_relay};
-use futures::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use hoshi_clientlib::{HoshiEnvelope, identity::HoshiIdentity};
 use hoshi_relay::api;
 use reqwest::StatusCode;

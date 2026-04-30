@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use futures::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use hoshi_clientlib::HoshiEnvelope;
 use http_body_util::Full;
 use hyper::{

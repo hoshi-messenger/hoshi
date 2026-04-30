@@ -1,6 +1,6 @@
 use std::{cell::RefCell, sync::mpsc, time::Duration};
 
-use futures::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use reqwest::header::USER_AGENT;
 use reqwest_websocket::{Message, RequestBuilderExt};
 use serde::{Deserialize, Serialize};

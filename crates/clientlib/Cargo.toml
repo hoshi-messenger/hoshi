@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 tokio = { workspace = true }
-futures = { workspace = true }
+futures-util = { workspace = true }
 reqwest = { workspace = true }
 reqwest-websocket = { workspace = true }
 dirs = { workspace = true }
